@@ -13,7 +13,7 @@ import org.apache.lucene.codecs.StoredFieldsReader;
 import org.apache.lucene.index.SegmentReadState;
 import org.apache.lucene.util.BytesRef;
 import org.elasticsearch.core.Nullable;
-import org.elasticsearch.index.codec.storedfields.PerFieldStoredFieldsFormat;
+import org.elasticsearch.index.codec.storedfields.TSDBStoredFieldsFormat;
 
 import java.io.Closeable;
 import java.io.IOException;
@@ -38,8 +38,8 @@ public interface BloomFilter extends Closeable {
 
         boolean success = false;
         try {
-            if (storedFieldsReader instanceof PerFieldStoredFieldsFormat.PerFieldStoredFieldsReader perFieldStoredFieldsReader) {
-                StoredFieldsReader idStoredFieldsReader = perFieldStoredFieldsReader.getReaderForField(field);
+            if (storedFieldsReader instanceof TSDBStoredFieldsFormat.PerFieldStoredFieldsReader perFieldStoredFieldsReader) {
+                StoredFieldsReader idStoredFieldsReader = perFieldStoredFieldsReader.getIdBloomFilterReader();
                 if (idStoredFieldsReader instanceof BloomFilter bloomFilter && bloomFilter.isFilterAvailable()) {
                     success = true;
                     // We need to close the PerFieldStoredFieldsFormatReader otherwise we'll leak the reader for other fields

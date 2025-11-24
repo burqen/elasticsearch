@@ -18,7 +18,6 @@ import org.elasticsearch.common.util.FeatureFlag;
 import org.elasticsearch.core.Nullable;
 import org.elasticsearch.index.IndexMode;
 import org.elasticsearch.index.IndexSettings;
-import org.elasticsearch.index.codec.tsdb.TSDBSyntheticIdCodec;
 import org.elasticsearch.index.codec.zstd.Zstd814StoredFieldsFormat;
 import org.elasticsearch.index.mapper.MapperService;
 
@@ -46,42 +45,72 @@ public class CodecService implements CodecProvider {
     /** the raw unfiltered lucene default. useful for testing */
     public static final String LUCENE_DEFAULT_CODEC = "lucene_default";
 
+    private enum StorageMode {
+        TIME_SERIES,
+        STANDARD;
+
+        static StorageMode from(MapperService mapperService) {
+            return IndexSettings.USE_STORED_FIELDS_BLOOM_FILTER_FOR_ID_FEATURE_FLAG
+                && mapperService != null
+                && mapperService.getIndexSettings().useTimeSeriesSyntheticId()
+                && mapperService.getIndexSettings().useStoredFieldsBloomFilterForId()
+                && mapperService.getIndexSettings().getMode() == IndexMode.TIME_SERIES ? TIME_SERIES : STANDARD;
+        }
+    }
+
     public CodecService(@Nullable MapperService mapperService, BigArrays bigArrays) {
         final var codecs = new HashMap<String, Codec>();
 
-        Codec legacyBestSpeedCodec = new LegacyPerFieldMapperCodec(Lucene103Codec.Mode.BEST_SPEED, mapperService, bigArrays);
-        if (IndexSettings.USE_STORED_FIELDS_BLOOM_FILTER_FOR_ID_FEATURE_FLAG) {
-            if (ZSTD_STORED_FIELDS_FEATURE_FLAG) {
-                codecs.put(
-                    DEFAULT_CODEC,
-                    new PerFieldMapperCodecZstdCompression(Zstd814StoredFieldsFormat.Mode.BEST_SPEED, mapperService, bigArrays)
-                );
-            } else {
-                codecs.put(
-                    DEFAULT_CODEC,
-                    new PerFieldMapperCodecDefaultCompression(Lucene103Codec.Mode.BEST_SPEED, mapperService, bigArrays)
-                );
-            }
-        } else if (ZSTD_STORED_FIELDS_FEATURE_FLAG) {
-            codecs.put(DEFAULT_CODEC, new PerFieldMapperCodec(Zstd814StoredFieldsFormat.Mode.BEST_SPEED, mapperService, bigArrays));
+        StorageMode storageMode = StorageMode.from(mapperService);
+        var legacyBestSpeedCodec = new LegacyPerFieldMapperCodec(Lucene103Codec.Mode.BEST_SPEED, mapperService, bigArrays);
+        if (ZSTD_STORED_FIELDS_FEATURE_FLAG) {
+            PerFieldMapperCodec defaultZstdCodec = new PerFieldMapperCodec(
+                Zstd814StoredFieldsFormat.Mode.BEST_SPEED,
+                mapperService,
+                bigArrays
+            );
+            codecs.put(
+                DEFAULT_CODEC,
+                storageMode == StorageMode.STANDARD
+                    ? defaultZstdCodec
+                    : new ES93TSDBZSTDCompressionLucene103Codec(defaultZstdCodec, bigArrays)
+            );
         } else {
-            codecs.put(DEFAULT_CODEC, legacyBestSpeedCodec);
+            codecs.put(
+                DEFAULT_CODEC,
+                storageMode == StorageMode.STANDARD
+                    ? legacyBestSpeedCodec
+                    : new ES93TSDBDefaultCompressionLucene103Codec(legacyBestSpeedCodec, bigArrays)
+            );
         }
-        codecs.put(LEGACY_DEFAULT_CODEC, legacyBestSpeedCodec);
 
         codecs.put(
-            BEST_COMPRESSION_CODEC,
-            new PerFieldMapperCodec(Zstd814StoredFieldsFormat.Mode.BEST_COMPRESSION, mapperService, bigArrays)
+            LEGACY_DEFAULT_CODEC,
+            storageMode == StorageMode.STANDARD
+                ? legacyBestSpeedCodec
+                : new ES93TSDBDefaultCompressionLucene103Codec(legacyBestSpeedCodec, bigArrays)
         );
-        Codec legacyBestCompressionCodec = new LegacyPerFieldMapperCodec(Lucene103Codec.Mode.BEST_COMPRESSION, mapperService, bigArrays);
-        codecs.put(LEGACY_BEST_COMPRESSION_CODEC, legacyBestCompressionCodec);
+
+        var bestCompressionCodec = new PerFieldMapperCodec(Zstd814StoredFieldsFormat.Mode.BEST_COMPRESSION, mapperService, bigArrays);
+        codecs.put(
+            BEST_COMPRESSION_CODEC,
+            storageMode == StorageMode.STANDARD
+                ? bestCompressionCodec
+                : new ES93TSDBZSTDCompressionLucene103Codec(bestCompressionCodec, bigArrays)
+        );
+
+        var legacyBestCompressionCodec = new LegacyPerFieldMapperCodec(Lucene103Codec.Mode.BEST_COMPRESSION, mapperService, bigArrays);
+        codecs.put(
+            LEGACY_BEST_COMPRESSION_CODEC,
+            storageMode == StorageMode.STANDARD
+                ? legacyBestCompressionCodec
+                : new ES93TSDBDefaultCompressionLucene103Codec(legacyBestCompressionCodec, bigArrays)
+        );
 
         codecs.put(LUCENE_DEFAULT_CODEC, Codec.getDefault());
         for (String codec : Codec.availableCodecs()) {
             codecs.put(codec, Codec.forName(codec));
         }
-        final boolean useTsdbSyntheticId = mapperService != null && mapperService.getIndexSettings().useTimeSeriesSyntheticId();
-        assert useTsdbSyntheticId == false || mapperService.getIndexSettings().getMode() == IndexMode.TIME_SERIES;
 
         this.codecs = codecs.entrySet().stream().collect(Collectors.toUnmodifiableMap(Map.Entry::getKey, e -> {
             Codec codec;
@@ -89,9 +118,6 @@ public class CodecService implements CodecProvider {
                 codec = dedupCodec;
             } else {
                 codec = new DeduplicateFieldInfosCodec(e.getValue().getName(), e.getValue());
-            }
-            if (useTsdbSyntheticId && codec instanceof TSDBSyntheticIdCodec == false) {
-                codec = new TSDBSyntheticIdCodec(codec.getName(), codec);
             }
             return codec;
         }));

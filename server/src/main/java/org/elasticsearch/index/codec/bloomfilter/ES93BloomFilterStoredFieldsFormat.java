@@ -11,6 +11,7 @@ package org.elasticsearch.index.codec.bloomfilter;
 
 import org.apache.lucene.codecs.CodecUtil;
 import org.apache.lucene.codecs.FieldsProducer;
+import org.apache.lucene.codecs.StoredFieldsFormat;
 import org.apache.lucene.codecs.StoredFieldsReader;
 import org.apache.lucene.codecs.StoredFieldsWriter;
 import org.apache.lucene.index.CorruptIndexException;
@@ -39,14 +40,12 @@ import org.elasticsearch.common.util.BigArrays;
 import org.elasticsearch.common.util.ByteArray;
 import org.elasticsearch.core.IOUtils;
 import org.elasticsearch.core.Nullable;
-import org.elasticsearch.index.codec.storedfields.ESStoredFieldsFormat;
 
 import java.io.Closeable;
 import java.io.IOException;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Objects;
-import java.util.Set;
 import java.util.function.IntSupplier;
 
 import static org.elasticsearch.index.codec.bloomfilter.BloomFilterHashFunctions.MurmurHash3.hash64;
@@ -73,14 +72,10 @@ import static org.elasticsearch.index.codec.bloomfilter.BloomFilterHashFunctions
  *       be found in {@link BloomFilterMetadata}.
  * </ol>
  */
-public class ES93BloomFilterStoredFieldsFormat extends ESStoredFieldsFormat {
+public class ES93BloomFilterStoredFieldsFormat extends StoredFieldsFormat {
     public static final String FORMAT_NAME = "ES93BloomFilterStoredFieldsFormat";
     public static final String STORED_FIELDS_BLOOM_FILTER_EXTENSION = "sfbf";
     public static final String STORED_FIELDS_METADATA_BLOOM_FILTER_EXTENSION = "sfbfm";
-    private static final Set<String> FILE_EXTENSIONS = Set.of(
-        STORED_FIELDS_METADATA_BLOOM_FILTER_EXTENSION,
-        STORED_FIELDS_BLOOM_FILTER_EXTENSION
-    );
     private static final int VERSION_START = 0;
     private static final int VERSION_CURRENT = VERSION_START;
 
@@ -100,7 +95,6 @@ public class ES93BloomFilterStoredFieldsFormat extends ESStoredFieldsFormat {
 
     // Public constructor SPI use for reads only
     public ES93BloomFilterStoredFieldsFormat() {
-        super(FORMAT_NAME);
         bigArrays = null;
         bloomFilterFieldName = null;
         numHashFunctions = 0;
@@ -108,7 +102,6 @@ public class ES93BloomFilterStoredFieldsFormat extends ESStoredFieldsFormat {
     }
 
     public ES93BloomFilterStoredFieldsFormat(BigArrays bigArrays, ByteSizeValue bloomFilterSize, String bloomFilterFieldName) {
-        super(FORMAT_NAME);
         this.bigArrays = bigArrays;
         this.bloomFilterFieldName = bloomFilterFieldName;
         this.numHashFunctions = DEFAULT_NUM_HASH_FUNCTIONS;
@@ -137,11 +130,6 @@ public class ES93BloomFilterStoredFieldsFormat extends ESStoredFieldsFormat {
 
     int getBloomFilterSizeInBits() {
         return bloomFilterSizeInBits;
-    }
-
-    @Override
-    protected Set<String> getFileExtensions() {
-        return FILE_EXTENSIONS;
     }
 
     static int closestPowerOfTwoBloomFilterSizeInBits(ByteSizeValue bloomFilterSize) {
@@ -547,7 +535,7 @@ public class ES93BloomFilterStoredFieldsFormat extends ESStoredFieldsFormat {
         }
     }
 
-    private static class Reader extends StoredFieldsReader implements BloomFilter {
+    public static class Reader extends StoredFieldsReader implements BloomFilter {
         @Nullable
         private final BloomFilterFieldReader bloomFilterFieldReader;
 

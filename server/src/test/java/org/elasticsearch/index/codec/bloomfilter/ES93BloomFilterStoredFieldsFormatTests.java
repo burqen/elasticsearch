@@ -12,6 +12,7 @@ package org.elasticsearch.index.codec.bloomfilter;
 import org.apache.lucene.analysis.Analyzer;
 import org.apache.lucene.codecs.StoredFieldsFormat;
 import org.apache.lucene.codecs.StoredFieldsReader;
+import org.apache.lucene.codecs.lucene90.Lucene90StoredFieldsFormat;
 import org.apache.lucene.document.Document;
 import org.apache.lucene.document.Field;
 import org.apache.lucene.document.LongField;
@@ -34,9 +35,7 @@ import org.apache.lucene.util.BytesRef;
 import org.elasticsearch.common.UUIDs;
 import org.elasticsearch.common.unit.ByteSizeValue;
 import org.elasticsearch.common.util.BigArrays;
-import org.elasticsearch.index.codec.storedfields.ESLucene90StoredFieldsFormat;
-import org.elasticsearch.index.codec.storedfields.ESStoredFieldsFormat;
-import org.elasticsearch.index.codec.storedfields.PerFieldStoredFieldsFormat;
+import org.elasticsearch.index.codec.storedfields.TSDBStoredFieldsFormat;
 import org.elasticsearch.index.mapper.IdFieldMapper;
 import org.elasticsearch.test.ESTestCase;
 
@@ -59,7 +58,6 @@ public class ES93BloomFilterStoredFieldsFormatTests extends ESTestCase {
             var bloomFilterSizeInKb = atLeast(2);
             conf.setCodec(
                 new TestCodec(
-                    IdFieldMapper.NAME,
                     new ES93BloomFilterStoredFieldsFormat(
                         BigArrays.NON_RECYCLING_INSTANCE,
                         ByteSizeValue.ofKb(bloomFilterSizeInKb),
@@ -90,34 +88,9 @@ public class ES93BloomFilterStoredFieldsFormatTests extends ESTestCase {
             Analyzer analyzer = new MockAnalyzer(random());
             IndexWriterConfig conf = newIndexWriterConfig(analyzer);
             var randomBloomFilterSizes = random().nextBoolean();
-            conf.setCodec(new AssertingCodec() {
-                @Override
-                public StoredFieldsFormat storedFieldsFormat() {
-                    var bloomFilterSizeInKb = atLeast(2);
-                    return new ES93BloomFilterStoredFieldsFormat(
-                        BigArrays.NON_RECYCLING_INSTANCE,
-                        ByteSizeValue.ofKb(bloomFilterSizeInKb),
-                        IdFieldMapper.NAME
-                    ) {
-                        @Override
-                        int getBloomFilterSizeInBits() {
-                            if (randomBloomFilterSizes) {
-                                // Use different power of 2 values so we rebuild the bloom filter from the _id terms
-                                var bloomFilterSizeInBytes = ByteSizeValue.ofKb(1).getBytes() << atLeast(5);
-
-                                return ES93BloomFilterStoredFieldsFormat.closestPowerOfTwoBloomFilterSizeInBits(
-                                    ByteSizeValue.ofBytes(bloomFilterSizeInBytes)
-                                );
-                            }
-                            return super.getBloomFilterSizeInBits();
-                        }
-                    };
-                }
-            });
             var bloomFilterSizeInKb = atLeast(2);
             conf.setCodec(
                 new TestCodec(
-                    IdFieldMapper.NAME,
                     new ES93BloomFilterStoredFieldsFormat(
                         BigArrays.NON_RECYCLING_INSTANCE,
                         ByteSizeValue.ofKb(bloomFilterSizeInKb),
@@ -220,12 +193,12 @@ public class ES93BloomFilterStoredFieldsFormatTests extends ESTestCase {
 
         StoredFieldsReader storedFieldsReader = si.getCodec().storedFieldsFormat().fieldsReader(si.dir, si, fieldInfos, IOContext.DEFAULT);
 
-        assertThat(storedFieldsReader, is(instanceOf(PerFieldStoredFieldsFormat.PerFieldStoredFieldsReader.class)));
+        assertThat(storedFieldsReader, is(instanceOf(TSDBStoredFieldsFormat.PerFieldStoredFieldsReader.class)));
 
-        PerFieldStoredFieldsFormat.PerFieldStoredFieldsReader perFieldStoredFieldsReader =
-            (PerFieldStoredFieldsFormat.PerFieldStoredFieldsReader) storedFieldsReader;
+        TSDBStoredFieldsFormat.PerFieldStoredFieldsReader tsdbStoredFieldsFormat =
+            (TSDBStoredFieldsFormat.PerFieldStoredFieldsReader) storedFieldsReader;
 
-        StoredFieldsReader bloomFilterReader = perFieldStoredFieldsReader.getReaderForField(IdFieldMapper.NAME);
+        StoredFieldsReader bloomFilterReader = tsdbStoredFieldsFormat.getIdBloomFilterReader();
 
         assertThat(bloomFilterReader, is(instanceOf(BloomFilter.class)));
         BloomFilter bloomFilter = (BloomFilter) bloomFilterReader;
@@ -249,26 +222,15 @@ public class ES93BloomFilterStoredFieldsFormatTests extends ESTestCase {
     }
 
     static class TestCodec extends AssertingCodec {
-        private final String bloomFilterField;
-        private final ES93BloomFilterStoredFieldsFormat bloomFilterStoredFieldsFormat;
-        private final ESStoredFieldsFormat defaultStoredFieldsFormat = new ESLucene90StoredFieldsFormat();
+        private final StoredFieldsFormat storedFieldsFormat;
 
-        TestCodec(String bloomFilterField, ES93BloomFilterStoredFieldsFormat bloomFilterStoredFieldsFormat) {
-            this.bloomFilterField = bloomFilterField;
-            this.bloomFilterStoredFieldsFormat = bloomFilterStoredFieldsFormat;
+        TestCodec(ES93BloomFilterStoredFieldsFormat bloomFilterStoredFieldsFormat) {
+            this.storedFieldsFormat = new TSDBStoredFieldsFormat(new Lucene90StoredFieldsFormat(), bloomFilterStoredFieldsFormat);
         }
 
         @Override
         public StoredFieldsFormat storedFieldsFormat() {
-            return new PerFieldStoredFieldsFormat() {
-                @Override
-                protected ESStoredFieldsFormat getStoredFieldsFormatForField(String field) {
-                    if (field.equals(bloomFilterField)) {
-                        return bloomFilterStoredFieldsFormat;
-                    }
-                    return defaultStoredFieldsFormat;
-                }
-            };
+            return storedFieldsFormat;
         }
     }
 }
