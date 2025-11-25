@@ -56,6 +56,7 @@ import org.elasticsearch.common.lucene.Lucene;
 import org.elasticsearch.core.CheckedConsumer;
 import org.elasticsearch.core.IOUtils;
 import org.elasticsearch.index.codec.postings.ES812PostingsFormat;
+import org.elasticsearch.index.mapper.SyntheticIdField;
 import org.elasticsearch.index.shard.ShardId;
 import org.elasticsearch.index.store.LuceneFilesExtensions;
 
@@ -366,6 +367,11 @@ final class IndexDiskUsageAnalyzer {
             directory.resetBytesRead();
             final Terms terms = postingsReader.terms(field.name);
             if (terms == null) {
+                continue;
+            }
+            if (SyntheticIdField.hasSyntheticIdAttributes(field.attributes())) {
+                // Synthetic _id field, possibly hidden behind bloom filter, does not
+                // contribute to index disk usage.
                 continue;
             }
             // It's expensive to look up every term and visit every document of the postings lists of all terms.
