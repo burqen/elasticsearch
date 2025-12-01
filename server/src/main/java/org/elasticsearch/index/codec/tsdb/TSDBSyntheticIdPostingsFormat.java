@@ -12,7 +12,9 @@ package org.elasticsearch.index.codec.tsdb;
 import org.apache.lucene.codecs.DocValuesProducer;
 import org.apache.lucene.codecs.FieldsConsumer;
 import org.apache.lucene.codecs.FieldsProducer;
+import org.apache.lucene.codecs.NormsProducer;
 import org.apache.lucene.codecs.PostingsFormat;
+import org.apache.lucene.index.Fields;
 import org.apache.lucene.index.SegmentReadState;
 import org.apache.lucene.index.SegmentWriteState;
 import org.elasticsearch.core.IOUtils;
@@ -62,7 +64,16 @@ public class TSDBSyntheticIdPostingsFormat extends PostingsFormat {
 
     @Override
     public FieldsConsumer fieldsConsumer(SegmentWriteState state) throws IOException {
-        assert false : "this should never be called";
-        throw new UnsupportedOperationException();
+        return new FieldsConsumer() {
+            @Override
+            public void write(Fields fields, NormsProducer norms) throws IOException {
+                // Empty consumer
+            }
+
+            @Override
+            public void close() throws IOException {
+                // Nothing to close
+            }
+        };
     }
 }
