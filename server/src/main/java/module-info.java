@@ -449,8 +449,7 @@ module org.elasticsearch.server {
             org.elasticsearch.index.codec.tsdb.TSDBSyntheticIdPostingsFormat,
             org.elasticsearch.index.codec.bloomfilter.ES85BloomFilterPostingsFormat,
             org.elasticsearch.index.codec.bloomfilter.ES87BloomFilterPostingsFormat,
-            org.elasticsearch.index.codec.postings.ES812PostingsFormat,
-            org.elasticsearch.index.codec.tsdb.TSDBSyntheticIdPostingsFormat;
+            org.elasticsearch.index.codec.postings.ES812PostingsFormat;
     provides org.apache.lucene.codecs.DocValuesFormat
         with
             org.elasticsearch.index.codec.tsdb.ES87TSDBDocValuesFormat,
