@@ -741,6 +741,9 @@ public class ThrottlingRecoveryServiceTests extends ESTestCase {
             new CompositeRecoverySchedulingListener()
         );
 
+        final int producerThreads = between(1, 6);
+        final var currentMaxConcurrentRecoveries = new AtomicInteger(peakLimit.get());
+        final var runningOrPending = new AtomicInteger();
         final var running = new AtomicInteger();
         final var peakRunning = new AtomicInteger();
         final var tasksEnqueued = new AtomicInteger();
@@ -757,24 +760,26 @@ public class ThrottlingRecoveryServiceTests extends ESTestCase {
                 ShardLongFieldRange timestampMillisFieldRange,
                 ShardLongFieldRange eventIngestedMillisFieldRange
             ) {
+                runningOrPending.decrementAndGet();
                 tasksCompleted.incrementAndGet();
                 refCounted.decRef();
             }
 
             @Override
             public void onRecoveryFailure(RecoveryFailedException e, boolean sendShardFailure) {
+                runningOrPending.decrementAndGet();
                 tasksCompleted.incrementAndGet();
                 refCounted.decRef();
             }
 
             @Override
             public void onRecoveryAborted() {
+                runningOrPending.decrementAndGet();
                 tasksCompleted.incrementAndGet();
                 refCounted.decRef();
             }
         };
 
-        final int producerThreads = between(3, 6);
         runInParallel(producerThreads, index -> {
             while (tasksEnqueued.get() < maxTaskCount) {
                 if (index == 0) {
@@ -785,23 +790,35 @@ public class ThrottlingRecoveryServiceTests extends ESTestCase {
                                 Settings.builder().put(INDICES_RECOVERY_MAX_CONCURRENT_RECOVERIES_SETTING.getKey(), nextLimit).build()
                             );
                         peakLimit.accumulateAndGet(nextLimit, Integer::max);
+                        currentMaxConcurrentRecoveries.set(nextLimit);
                     }
                     if ((tasksEnqueued.get() * 1.0 / maxTaskCount) > 0.8 && rarely()) {
                         throttlingRecoveryService.close();
                     }
                 }
-                final boolean highContention = randomBoolean();
-                int incomingTasks = highContention ? between(2, 50) : 1;
-                if (highContention == false) {
-                    Thread.yield();
-                }
-                for (int i = 0; i < incomingTasks && tasksEnqueued.get() < maxTaskCount; i++) {
-                    refCounted.incRef();
-                    tasksEnqueued.incrementAndGet();
-                    throttlingRecoveryService.enqueue(trackingListener, recoveryState, stats, schedulingListener -> {
-                        peakRunning.accumulateAndGet(running.incrementAndGet(), Integer::max);
-                        runStressInboundRecoveryTask(recoveryState, schedulingListener, running);
-                    });
+
+                int localRunningOrPending = runningOrPending.get();
+                int localLimit = currentMaxConcurrentRecoveries.get();
+                if (randomDouble() > localRunningOrPending * 1.0 / localLimit) {
+                    // Will only generate load if there are free slots
+                    // and likelihood to generate load is proportional
+                    // to the number of free slots. If all slots are free
+                    // (localRunningOrPending == 0), then likelihood to
+                    // generate load is 100%
+
+                    // Rarely have a burst of tasks to fill queue
+                    boolean burst = randomDouble() > 0.99;
+                    int incomingTasks = burst ? localLimit : 1;
+                    for (int i = 0; i < incomingTasks && tasksEnqueued.get() < maxTaskCount; i++) {
+                        refCounted.incRef();
+                        runningOrPending.incrementAndGet();
+                        tasksEnqueued.incrementAndGet();
+                        throttlingRecoveryService.enqueue(trackingListener, recoveryState, stats, schedulingListener -> {
+                            peakRunning.accumulateAndGet(running.incrementAndGet(), Integer::max);
+                            runStressInboundRecoveryTask(recoveryState, schedulingListener, running);
+                        });
+                        Thread.yield();
+                    }
                 }
                 Thread.yield();
             }
@@ -822,7 +839,7 @@ public class ThrottlingRecoveryServiceTests extends ESTestCase {
         AtomicInteger running
     ) {
         threadPool.generic().execute(() -> {
-            ESTestCase.safeSleep(randomLongBetween(0, 20));
+            Thread.yield();
             running.decrementAndGet();
             if (randomBoolean()) {
                 schedulingListener.onRecoveryDone(null, ShardLongFieldRange.EMPTY, ShardLongFieldRange.EMPTY);
