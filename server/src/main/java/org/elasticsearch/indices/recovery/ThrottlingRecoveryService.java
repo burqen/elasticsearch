@@ -78,6 +78,7 @@ public final class ThrottlingRecoveryService implements Closeable {
                 pendingRecovery = new PendingRecovery(recoveryState, stats, task, recoveryListener);
                 pendingRecoveries.add(pendingRecovery);
                 stats.targetRecoveryQueued(recoveryState.getRecoverySource().getType());
+                logger.info("--> enqueue, running recoveries [{}], in queue [{}]", runningRecoveries, pendingRecoveries.size());
             } else {
                 pendingRecovery = null;
             }
@@ -133,6 +134,7 @@ public final class ThrottlingRecoveryService implements Closeable {
                 return;
             }
             while (pendingRecoveries.isEmpty() == false && runningRecoveries < maxConcurrentRecoveries) {
+                logger.info("--> dispatch, running recoveries [{}], in queue [{}]", runningRecoveries, pendingRecoveries.size());
                 final PendingRecovery recovery = pendingRecoveries.poll();
                 recoveriesToDispatch.add(recovery);
                 runningRecoveries++;
@@ -154,6 +156,7 @@ public final class ThrottlingRecoveryService implements Closeable {
             currentRunning = runningRecoveries;
             assert currentRunning >= 0 : "negative number of running recoveries " + currentRunning;
             recovery.stats().targetRecoveryCompleted(source.getType());
+            logger.info("--> releaseSlot, running recoveries [{}], in queue [{}]", runningRecoveries, pendingRecoveries.size());
         }
         logger.trace("recovery slot released: {}", recovery.recoveryState());
         schedulingListeners.onRecoveryCompleted(source.getType(), RecoveryRole.TARGET);
