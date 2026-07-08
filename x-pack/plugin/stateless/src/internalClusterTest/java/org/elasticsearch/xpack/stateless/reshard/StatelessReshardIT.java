@@ -4564,16 +4564,18 @@ public class StatelessReshardIT extends AbstractStatelessPluginIntegTestCase {
 
         // Note that we don't refresh since this is realtime.
 
+        Index index = resolveIndex(indexName);
+        IndexReshardingMetadata reshardingMetadata = indexMetadata(clusterService().state(), index).getReshardingMetadata();
         var preSplitResponse = client(coordinator).prepareMultiTermVectors()
             .add(new TermVectorsRequest(indexName, document1Id).realtime(true))
             .add(new TermVectorsRequest(indexName, document2Id).realtime(true))
             .get(SAFE_AWAIT_TIMEOUT);
         var document1PreSplitResponse = preSplitResponse.getResponses()[0].getResponse();
-        assertTrue(document1PreSplitResponse.isExists());
+        assertTrue("term vectors returned exists=false. Reshard metadata: " + reshardingMetadata, document1PreSplitResponse.isExists());
         assertEquals(1, document1PreSplitResponse.getFields().size());
         assertEquals("field", document1PreSplitResponse.getFields().iterator().next());
         var document2PreSplitResponse = preSplitResponse.getResponses()[1].getResponse();
-        assertTrue(document2PreSplitResponse.isExists());
+        assertTrue("term vectors returned exists=false. Reshard metadata: " + reshardingMetadata, document2PreSplitResponse.isExists());
         assertEquals(1, document2PreSplitResponse.getFields().size());
         assertEquals("field", document2PreSplitResponse.getFields().iterator().next());
 
@@ -4605,11 +4607,16 @@ public class StatelessReshardIT extends AbstractStatelessPluginIntegTestCase {
         // Simulate a request arriving at a stale coordinator by blocking shard level requests with current old summary.
         var readInitiated = new CountDownLatch(1);
         var readBlocked = new CountDownLatch(1);
+        var multiTermVectorsRequests = new AtomicInteger(0);
         var coordinatorTransportService = MockTransportService.getInstance(coordinator);
         coordinatorTransportService.addSendBehavior((connection, requestId, action, request, options) -> {
             if (action.equals(TransportShardMultiTermsVectorAction.TYPE.name() + "[s]")) {
-                readInitiated.countDown();
-                safeAwait(readBlocked);
+                int count = multiTermVectorsRequests.incrementAndGet();
+                logger.info("MultiTermVectors [s] request #{} to [{}]", count, connection.getNode().getName());
+                if (count == 1) {
+                    readInitiated.countDown();
+                    safeAwait(readBlocked);
+                }
             }
             connection.sendRequest(requestId, action, request, options);
         });
@@ -4642,16 +4649,17 @@ public class StatelessReshardIT extends AbstractStatelessPluginIntegTestCase {
 
             var response = safeGet(readFuture);
             // We retry the operation because it is stale and get a legit response.
+            reshardingMetadata = indexMetadata(clusterService().state(), index).getReshardingMetadata();
             var document1Response = response.getResponses()[0].getResponse();
-            assertTrue(document1Response.isExists());
+            assertTrue("term vectors returned exists=false. Reshard metadata: " + reshardingMetadata, document1Response.isExists());
             assertEquals(1, document1Response.getFields().size());
             assertEquals("field", document1Response.getFields().iterator().next());
             var document2Response = response.getResponses()[1].getResponse();
-            assertTrue(document2Response.isExists());
+            assertTrue("term vectors returned exists=false. Reshard metadata: " + reshardingMetadata, document2Response.isExists());
             assertEquals(1, document2Response.getFields().size());
             assertEquals("field", document2Response.getFields().iterator().next());
             var document3Response = response.getResponses()[2].getResponse();
-            assertTrue(document3Response.isExists());
+            assertTrue("term vectors returned exists=false. Reshard metadata: " + reshardingMetadata, document3Response.isExists());
             assertEquals(1, document3Response.getFields().size());
             assertEquals("field", document3Response.getFields().iterator().next());
 
