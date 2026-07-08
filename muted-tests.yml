@@ -737,9 +737,6 @@ tests:
 - class: org.elasticsearch.xpack.esql.expression.predicate.operator.arithmetic.SubTests
   method: testCrankyEvaluateBlockWithoutNulls {TestCase=<big positive double>, <big negative double>}
   issue: https://github.com/elastic/elasticsearch/issues/153069
-- class: org.elasticsearch.xpack.stateless.reshard.StatelessReshardIT
-  method: testMultiTermVectorsApiRealtimeGet
-  issue: https://github.com/elastic/elasticsearch/issues/150101
 - class: org.elasticsearch.xpack.esql.CsvIT
   method: test {csv-spec:inlinestats.doubleShadowingWithEval}
   issue: https://github.com/elastic/elasticsearch/issues/153096
