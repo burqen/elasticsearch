@@ -137,7 +137,16 @@ public class TransportEnsureDocsSearchableAction extends TransportSingleShardAct
             }
 
             // Now that we performed realtime reads above we should check if they could be stale due to resharding.
+            // todo(burqen): Remove once issue solved https://github.com/elastic/elasticsearch/issues/150101
+            logger.trace(
+                "eds checking realtime read staleness for shard [{}] with summary [{}] docsFoundInLiveVersionMap [{}]",
+                shardId,
+                request.getSplitShardCountSummary(),
+                docsFoundInLiveVersionMap
+            );
             if (IndexReshardService.isRealtimeReadPossiblyStale(indexShard, request.getSplitShardCountSummary())) {
+                // todo(burqen): Remove once issue solved https://github.com/elastic/elasticsearch/issues/150101
+                logger.trace("eds realtime read is stale for shard [{}], throwing StaleRequestException", shardId);
                 throw new StaleRequestException(indexShard.shardId(), request.getSplitShardCountSummary());
             }
 

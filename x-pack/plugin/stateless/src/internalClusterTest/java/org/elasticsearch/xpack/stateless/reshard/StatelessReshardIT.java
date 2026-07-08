@@ -4538,6 +4538,12 @@ public class StatelessReshardIT extends AbstractStatelessPluginIntegTestCase {
         }
     }
 
+    // todo(burqen): Remove once issue solved https://github.com/elastic/elasticsearch/issues/150101
+    @TestLogging(
+        reason = "debugging realtime read staleness during resharding",
+        value = "org.elasticsearch.index.IndexReshardService:TRACE,"
+            + "org.elasticsearch.xpack.stateless.action.TransportEnsureDocsSearchableAction:TRACE"
+    )
     public void testMultiTermVectorsApiRealtimeGet() throws IOException, InterruptedException, ExecutionException {
         String masterNode = startMasterOnlyNode();
         var indexNode = startIndexNode();
@@ -4644,6 +4650,10 @@ public class StatelessReshardIT extends AbstractStatelessPluginIntegTestCase {
             safeGet(indexFuture);
 
             // And now we perform the "stale" read.
+            logger.info(
+                "unblocking stale read after handoff; resharding metadata at this point: {}",
+                indexMetadata(clusterService().state(), index).getReshardingMetadata()
+            );
             readBlocked.countDown();
 
             var response = safeGet(readFuture);

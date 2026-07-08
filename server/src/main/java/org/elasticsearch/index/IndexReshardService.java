@@ -9,6 +9,8 @@
 
 package org.elasticsearch.index;
 
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.Logger;
 import org.elasticsearch.TransportVersion;
 import org.elasticsearch.cluster.ProjectState;
 import org.elasticsearch.cluster.metadata.IndexMetadata;
@@ -25,6 +27,9 @@ import java.util.Set;
  * needed by other services.
  */
 public class IndexReshardService {
+    // todo(burqen): Remove once issue solved https://github.com/elastic/elasticsearch/issues/150101
+    private static final Logger logger = LogManager.getLogger(IndexReshardService.class);
+
     public static TransportVersion RESHARDING_SHARD_SUMMARY_IN_ESQL = TransportVersion.fromName("resharding_shard_summary_in_esql");
 
     /**
@@ -98,7 +103,18 @@ public class IndexReshardService {
                 assert split.isSourceShard(indexShard.shardId().id());
 
                 int targetShard = split.targetShard(indexShard.shardId().id());
-                yield reshardingMetadata.getSplit().targetStateAtLeast(targetShard, IndexReshardingState.Split.TargetShardState.HANDOFF);
+                boolean atHandoff = reshardingMetadata.getSplit()
+                    .targetStateAtLeast(targetShard, IndexReshardingState.Split.TargetShardState.HANDOFF);
+                // todo(burqen): Remove once issue solved https://github.com/elastic/elasticsearch/issues/150101
+                logger.trace(
+                    "realtime read stale check: shard [{}] summary [{}] numberOfShards [{}] targetShard [{}] atHandoff [{}]",
+                    indexShard.shardId(),
+                    splitShardCountSummary,
+                    indexMetadata.getNumberOfShards(),
+                    targetShard,
+                    atHandoff
+                );
+                yield atHandoff;
             }
             case CURRENT -> false;
             case INVALID -> true;
