@@ -191,7 +191,6 @@ import static org.hamcrest.Matchers.is;
 import static org.hamcrest.Matchers.lessThanOrEqualTo;
 import static org.hamcrest.Matchers.notNullValue;
 import static org.hamcrest.Matchers.nullValue;
-import static org.junit.Assert.assertFalse;
 
 public class StatelessReshardIT extends AbstractStatelessPluginIntegTestCase {
 
@@ -4651,15 +4650,19 @@ public class StatelessReshardIT extends AbstractStatelessPluginIntegTestCase {
             // We retry the operation because it is stale and get a legit response.
             reshardingMetadata = indexMetadata(clusterService().state(), index).getReshardingMetadata();
             var document1Response = response.getResponses()[0].getResponse();
-            assertTrue("term vectors returned exists=false. Reshard metadata: " + reshardingMetadata, document1Response.isExists());
+            String docDontExistMessage = "term vectors returned exists=false after ["
+                + multiTermVectorsRequests.get()
+                + "] attempts. Reshard metadata at time of validating assertion: "
+                + reshardingMetadata;
+            assertTrue(docDontExistMessage, document1Response.isExists());
             assertEquals(1, document1Response.getFields().size());
             assertEquals("field", document1Response.getFields().iterator().next());
             var document2Response = response.getResponses()[1].getResponse();
-            assertTrue("term vectors returned exists=false. Reshard metadata: " + reshardingMetadata, document2Response.isExists());
+            assertTrue(docDontExistMessage, document2Response.isExists());
             assertEquals(1, document2Response.getFields().size());
             assertEquals("field", document2Response.getFields().iterator().next());
             var document3Response = response.getResponses()[2].getResponse();
-            assertTrue("term vectors returned exists=false. Reshard metadata: " + reshardingMetadata, document3Response.isExists());
+            assertTrue(docDontExistMessage, document3Response.isExists());
             assertEquals(1, document3Response.getFields().size());
             assertEquals("field", document3Response.getFields().iterator().next());
 
