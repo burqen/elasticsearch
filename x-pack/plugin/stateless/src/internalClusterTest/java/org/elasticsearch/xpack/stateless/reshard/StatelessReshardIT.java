@@ -4572,7 +4572,7 @@ public class StatelessReshardIT extends AbstractStatelessPluginIntegTestCase {
         assertTrue(document1PreSplitResponse.isExists());
         assertEquals(1, document1PreSplitResponse.getFields().size());
         assertEquals("field", document1PreSplitResponse.getFields().iterator().next());
-        var document2PreSplitResponse = preSplitResponse.getResponses()[0].getResponse();
+        var document2PreSplitResponse = preSplitResponse.getResponses()[1].getResponse();
         assertTrue(document2PreSplitResponse.isExists());
         assertEquals(1, document2PreSplitResponse.getFields().size());
         assertEquals("field", document2PreSplitResponse.getFields().iterator().next());
