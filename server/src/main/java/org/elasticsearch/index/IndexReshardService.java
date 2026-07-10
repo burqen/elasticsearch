@@ -9,6 +9,7 @@
 
 package org.elasticsearch.index;
 
+import org.apache.logging.log4j.Level;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 import org.elasticsearch.TransportVersion;
@@ -105,15 +106,18 @@ public class IndexReshardService {
                 int targetShard = split.targetShard(indexShard.shardId().id());
                 boolean atHandoff = reshardingMetadata.getSplit()
                     .targetStateAtLeast(targetShard, IndexReshardingState.Split.TargetShardState.HANDOFF);
+
                 // todo(burqen): Remove once issue solved https://github.com/elastic/elasticsearch/issues/150101
-                logger.trace(
-                    "realtime read stale check: shard [{}] summary [{}] numberOfShards [{}] targetShard [{}] atHandoff [{}]",
-                    indexShard.shardId(),
-                    splitShardCountSummary,
-                    indexMetadata.getNumberOfShards(),
-                    targetShard,
-                    atHandoff
-                );
+                if (logger.isTraceEnabled()) {
+                    logger.trace(
+                        "realtime read stale check: shard [{}] summary [{}] numberOfShards [{}] targetShard [{}] atHandoff [{}]",
+                        indexShard.shardId(),
+                        splitShardCountSummary,
+                        indexMetadata.getNumberOfShards(),
+                        targetShard,
+                        atHandoff
+                    );
+                }
                 yield atHandoff;
             }
             case CURRENT -> false;
