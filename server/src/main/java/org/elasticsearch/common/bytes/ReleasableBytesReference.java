@@ -11,22 +11,34 @@ package org.elasticsearch.common.bytes;
 
 import org.apache.lucene.util.BytesRef;
 import org.apache.lucene.util.BytesRefIterator;
+import org.elasticsearch.ExceptionsHelper;
 import org.elasticsearch.common.io.stream.StreamInput;
 import org.elasticsearch.core.AbstractRefCounted;
 import org.elasticsearch.core.RefCounted;
 import org.elasticsearch.core.Releasable;
 import org.elasticsearch.core.Releasables;
+import org.elasticsearch.logging.LogManager;
+import org.elasticsearch.logging.Logger;
 import org.elasticsearch.xcontent.XContentBuilder;
 
 import java.io.IOException;
 import java.io.OutputStream;
 import java.util.Objects;
+import java.util.concurrent.atomic.AtomicLong;
 
 /**
  * An extension to {@link BytesReference} that requires releasing its content. This
  * class exists to make it explicit when a bytes reference needs to be released, and when not.
  */
 public final class ReleasableBytesReference implements RefCounted, Releasable, BytesReference {
+    static final AtomicLong NEXT_ID = new AtomicLong(0);
+    final long id = NEXT_ID.getAndIncrement();
+
+    public long getId() {
+        return id;
+    }
+
+    Logger logger = LogManager.getLogger(getClass());
 
     private static final ReleasableBytesReference EMPTY = new ReleasableBytesReference(BytesArray.EMPTY, RefCounted.ALWAYS_REFERENCED);
 
@@ -106,11 +118,19 @@ public final class ReleasableBytesReference implements RefCounted, Releasable, B
 
     @Override
     public boolean decRef() {
-        boolean res = refCounted.decRef();
-        if (res) {
+        boolean release = refCounted.decRef();
+        Throwable stackTrace = new Throwable();
+        logger.trace(
+            "decRef source=[{}], release=[{}], thread=[{}] stackTrace={}",
+            this,
+            release,
+            Thread.currentThread().getName(),
+            ExceptionsHelper.stackTrace(stackTrace)
+        );
+        if (release) {
             delegate = null;
         }
-        return res;
+        return release;
     }
 
     @Override
@@ -133,7 +153,7 @@ public final class ReleasableBytesReference implements RefCounted, Releasable, B
      * retaining unnecessary buffers.
      */
     public ReleasableBytesReference retainedSlice(int from, int length) {
-        assert hasReferences();
+        assert hasReferences() : "used without holding reference source=[" + this + "]";
         if (from == 0 && length() == length) {
             return retain();
         }
@@ -147,48 +167,60 @@ public final class ReleasableBytesReference implements RefCounted, Releasable, B
 
     @Override
     public void close() {
-        refCounted.decRef();
+        boolean release = refCounted.decRef();
+        Throwable stackTrace = new Throwable();
+        String s = ExceptionsHelper.stackTrace(stackTrace);
+        s = s.contains("org.elasticsearch.index.translog.TranslogWriter.writeAndReleaseOps")
+            ? "org.elasticsearch.index.translog.TranslogWriter.writeAndReleaseOps"
+            : s;
+        logger.trace(
+            "close -> decRef source=[{}], release=[{}], thread=[{}] stackTrace={}",
+            this,
+            release,
+            Thread.currentThread().getName(),
+            s
+        );
     }
 
     @Override
     public byte get(int index) {
-        assert hasReferences();
+        assert hasReferences() : "used without holding reference source=[" + this + "]";
         return delegate.get(index);
     }
 
     @Override
     public int getInt(int index) {
-        assert hasReferences();
+        assert hasReferences() : "used without holding reference source=[" + this + "]";
         return delegate.getInt(index);
     }
 
     @Override
     public int getIntLE(int index) {
-        assert hasReferences();
+        assert hasReferences() : "used without holding reference source=[" + this + "]";
         return delegate.getIntLE(index);
     }
 
     @Override
     public long getLongLE(int index) {
-        assert hasReferences();
+        assert hasReferences() : "used without holding reference source=[" + this + "]";
         return delegate.getLongLE(index);
     }
 
     @Override
     public double getDoubleLE(int index) {
-        assert hasReferences();
+        assert hasReferences() : "used without holding reference source=[" + this + "]";
         return delegate.getDoubleLE(index);
     }
 
     @Override
     public int indexOf(byte marker, int from) {
-        assert hasReferences();
+        assert hasReferences() : "used without holding reference source=[" + this + "]";
         return delegate.indexOf(marker, from);
     }
 
     @Override
     public int length() {
-        assert hasReferences();
+        assert hasReferences() : "used without holding reference source=[" + this + "]";
         return delegate.length();
     }
 
@@ -201,19 +233,19 @@ public final class ReleasableBytesReference implements RefCounted, Releasable, B
      */
     @Override
     public ReleasableBytesReference slice(int from, int length) {
-        assert hasReferences();
+        assert hasReferences() : "used without holding reference source=[" + this + "]";
         return new ReleasableBytesReference(delegate.slice(from, length), refCounted);
     }
 
     @Override
     public long ramBytesUsed() {
-        assert hasReferences();
+        assert hasReferences() : "used without holding reference source=[" + this + "]";
         return delegate.ramBytesUsed();
     }
 
     @Override
     public StreamInput streamInput() throws IOException {
-        assert hasReferences();
+        assert hasReferences() : "used without holding reference source=[" + this + "]";
         return new BytesReferenceStreamInput(delegate) {
             private ReleasableBytesReference retainAndSkip(int len) throws IOException {
                 if (len == 0) {
@@ -251,78 +283,83 @@ public final class ReleasableBytesReference implements RefCounted, Releasable, B
 
     @Override
     public void writeTo(OutputStream os) throws IOException {
-        assert hasReferences();
+        assert hasReferences() : "used without holding reference source=[" + this + "]";
         delegate.writeTo(os);
     }
 
     @Override
     public String utf8ToString() {
-        assert hasReferences();
+        assert hasReferences() : "used without holding reference source=[" + this + "]";
         return delegate.utf8ToString();
     }
 
     @Override
     public BytesRef toBytesRef() {
-        assert hasReferences();
+        assert hasReferences() : "used without holding reference source=[" + this + "]";
         return delegate.toBytesRef();
     }
 
     @Override
     public BytesRefIterator iterator() {
-        assert hasReferences();
+        assert hasReferences() : "used without holding reference source=[" + this + "]";
         return delegate.iterator();
     }
 
     @Override
     public int compareTo(BytesReference o) {
-        assert hasReferences();
+        assert hasReferences() : "used without holding reference source=[" + this + "]";
         return delegate.compareTo(o);
     }
 
     @Override
     public XContentBuilder toXContent(XContentBuilder builder, Params params) throws IOException {
-        assert hasReferences();
+        assert hasReferences() : "used without holding reference source=[" + this + "]";
         return delegate.toXContent(builder, params);
     }
 
     @Override
     public boolean isFragment() {
-        assert hasReferences();
+        assert hasReferences() : "used without holding reference source=[" + this + "]";
         return delegate.isFragment();
     }
 
     @Override
     public boolean equals(Object obj) {
-        assert hasReferences();
+        assert hasReferences() : "used without holding reference source=[" + this + "]";
         return delegate.equals(obj);
     }
 
     @Override
     public int hashCode() {
-        assert hasReferences();
+        assert hasReferences() : "used without holding reference source=[" + this + "]";
         return delegate.hashCode();
     }
 
     @Override
+    public String toString() {
+        return getClass().getName() + "@" + getId();
+    }
+
+    @Override
     public boolean hasArray() {
-        assert hasReferences();
+        assert hasReferences() : "used without holding reference source=[" + this + "]";
         return delegate.hasArray();
     }
 
     @Override
     public byte[] array() {
-        assert hasReferences();
+        assert hasReferences() : "used without holding reference source=[" + this + "]";
         return delegate.array();
     }
 
     @Override
     public int arrayOffset() {
-        assert hasReferences();
+        assert hasReferences() : "used without holding reference source=[" + this + "]";
         return delegate.arrayOffset();
     }
 
     public BytesReference delegate() {
-        assert hasReferences();
+        assert hasReferences() : "used without holding reference source=[" + this + "]";
         return delegate;
     }
 

@@ -38,6 +38,7 @@ import org.elasticsearch.tasks.TaskResultsService;
 import org.elasticsearch.test.ESIntegTestCase;
 import org.elasticsearch.test.NodeRoles;
 import org.elasticsearch.test.XContentTestUtils;
+import org.elasticsearch.test.junit.annotations.TestLogging;
 import org.elasticsearch.test.rest.ESRestTestCase;
 import org.elasticsearch.test.transport.MockTransportService;
 import org.elasticsearch.xcontent.XContentParser;
@@ -187,6 +188,13 @@ public class ReindexCancelRelocationIT extends ESIntegTestCase {
      * Verifies that {@code POST /_reindex/{taskId}/_cancel} cancels a reindex task using its <em>original</em> task id even after
      * relocation has moved the task to a new node and the original host has left the cluster.
      */
+    @TestLogging(
+        reason = "investigating premature release of ReleasableBytesReference during bulk write while reindex task is being cancelled",
+        value = "org.elasticsearch.reindex.Reindexer:TRACE,"
+            + "org.elasticsearch.reindex.ClientHit:TRACE,"
+            + "org.elasticsearch.search.SearchHit:TRACE,"
+            + "org.elasticsearch.common.bytes.ReleasableBytesReference:TRACE"
+    )
     public void testCancelReindexCancelsRelocatedTaskByOriginalTaskId() throws Exception {
         final String indexHostNode = internalCluster().startNode(
             NodeRoles.onlyRoles(Set.of(DiscoveryNodeRole.DATA_ROLE, DiscoveryNodeRole.MASTER_ROLE))

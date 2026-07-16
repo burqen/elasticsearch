@@ -627,7 +627,17 @@ public abstract class AbstractAsyncBulkByPaginatedSearchAction<
         // so oversized batches are rejected before all their source bytes land in memory. The reservation
         // is released (via cleanup) when the bulk listener completes or if we return early for any reason.
         final AtomicLong reservedBytes = new AtomicLong(0);
-        final Releasable releaseBatchHits = Releasables.releaseOnce(() -> releaseHits(hits));
+        final Releasable releaseBatchHits = Releasables.releaseOnce(() -> {
+            Throwable stackTrace = new Throwable();
+            logger.trace(
+                "[{}]: releasing [{}] batch hits, thread=[{}], stackTrace=[{}]",
+                task.getId(),
+                hits.size(),
+                Thread.currentThread().getName(),
+                ExceptionsHelper.stackTrace(stackTrace)
+            );
+            releaseHits(hits);
+        });
         final Releasable cleanup = Releasables.wrap(releaseBatchHits, () -> {
             long r = reservedBytes.getAndSet(0);
             if (r > 0) circuitBreaker.addWithoutBreaking(-r);
@@ -666,6 +676,13 @@ public abstract class AbstractAsyncBulkByPaginatedSearchAction<
      */
     void sendBulkRequest(BulkRequest request, Releasable releaseBatchHits, Runnable onSuccess) {
         final int requestSize = request.requests().size();
+        logger.trace(
+            "[{}]: entering sendBulkRequest with [{}] entries, isCancelled=[{}], thread=[{}]",
+            task.getId(),
+            requestSize,
+            task.isCancelled(),
+            Thread.currentThread().getName()
+        );
         if (logger.isDebugEnabled()) {
             logger.debug(
                 "[{}]: sending [{}] entry, [{}] bulk request",
@@ -676,18 +693,37 @@ public abstract class AbstractAsyncBulkByPaginatedSearchAction<
         }
         if (task.isCancelled()) {
             logger.debug("[{}]: finishing early because the task was cancelled", task.getId());
+            logger.trace(
+                "[{}]: releasing batch hits pre-bulk due to task cancellation, thread=[{}]",
+                task.getId(),
+                Thread.currentThread().getName()
+            );
             releaseBatchHits.close();
             finishHim(null);
             return;
         }
         if (requestFinishing.get()) {
+            logger.trace(
+                "[{}]: releasing batch hits pre-bulk due to requestFinishing, thread=[{}]",
+                task.getId(),
+                Thread.currentThread().getName()
+            );
             releaseBatchHits.close();
             return;
         }
         bulkRetry.withBackoff(bulkClient::bulk, request, ActionListener.releaseBefore(releaseBatchHits, ActionListener.wrap(response -> {
             logger.debug("[{}]: completed [{}] entry bulk request", task.getId(), requestSize);
             onBulkResponse(response, onSuccess);
-        }, this::finishHim)));
+        }, e -> {
+            logger.trace(
+                "[{}]: bulk request for [{}] entries failed with [{}], thread=[{}]",
+                task.getId(),
+                requestSize,
+                e.getClass().getSimpleName(),
+                Thread.currentThread().getName()
+            );
+            finishHim(e);
+        })));
     }
 
     /**

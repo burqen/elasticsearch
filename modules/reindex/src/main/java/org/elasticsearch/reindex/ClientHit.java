@@ -13,6 +13,8 @@ import org.elasticsearch.common.bytes.BytesReference;
 import org.elasticsearch.common.document.DocumentField;
 import org.elasticsearch.common.xcontent.XContentHelper;
 import org.elasticsearch.index.mapper.RoutingFieldMapper;
+import org.elasticsearch.logging.LogManager;
+import org.elasticsearch.logging.Logger;
 import org.elasticsearch.search.SearchHit;
 import org.elasticsearch.xcontent.XContentType;
 
@@ -23,6 +25,8 @@ import org.elasticsearch.xcontent.XContentType;
  */
 
 class ClientHit implements PaginatedHitSource.Hit {
+    private static final Logger logger = LogManager.getLogger(ClientHit.class);
+
     private final SearchHit delegate;
     private final BytesReference source;
 
@@ -84,6 +88,14 @@ class ClientHit implements PaginatedHitSource.Hit {
 
     @Override
     public void release() {
+        logger.trace(
+            "releasing ClientHit [{}/{}], delegate.hasReferences=[{}], source=[{}], thread=[{}]",
+            delegate.getIndex(),
+            delegate.getId(),
+            delegate.hasReferences(),
+            source.toString(),
+            Thread.currentThread().getName()
+        );
         delegate.decRef();
     }
 }

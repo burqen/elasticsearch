@@ -31,6 +31,8 @@ import org.elasticsearch.index.mapper.IgnoredSourceFieldMapper;
 import org.elasticsearch.index.mapper.MapperService;
 import org.elasticsearch.index.mapper.SourceFieldMapper;
 import org.elasticsearch.index.seqno.SequenceNumbers;
+import org.elasticsearch.logging.LogManager;
+import org.elasticsearch.logging.Logger;
 import org.elasticsearch.rest.action.search.RestSearchAction;
 import org.elasticsearch.search.fetch.subphase.LookupField;
 import org.elasticsearch.search.fetch.subphase.highlight.HighlightField;
@@ -63,7 +65,7 @@ import static org.elasticsearch.common.lucene.Lucene.writeExplanation;
  * @see SearchHits
  */
 public final class SearchHit implements Writeable, ToXContentObject, RefCounted {
-
+    Logger logger = LogManager.getLogger(SearchHit.class);
     private static final TransportVersion DOC_FIELDS_AS_LIST = TransportVersion.fromName("doc_fields_as_list");
 
     private final transient int docId;
@@ -734,7 +736,16 @@ public final class SearchHit implements Writeable, ToXContentObject, RefCounted 
 
     @Override
     public boolean decRef() {
-        if (refCounted.decRef()) {
+        boolean deallocate = refCounted.decRef();
+        logger.trace(
+            "decRef SearchHit [{}/{}], deallocate=[{}], source=[{}], thread=[{}]",
+            getIndex(),
+            getId(),
+            deallocate,
+            source.toString(),
+            Thread.currentThread().getName()
+        );
+        if (deallocate) {
             deallocate();
             return true;
         }

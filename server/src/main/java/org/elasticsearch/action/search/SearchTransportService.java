@@ -763,6 +763,7 @@ public class SearchTransportService {
                         try (ThreadContext.StoredContext ignored = contextSupplier.get()) {
                             Transport.Connection connection = transportService.getConnection(fetchSearchReq.getCoordinatingNode());
                             bytesToSend = responseChunk.toReleasableBytesReference(fetchSearchReq.getCoordinatingTaskId());
+                            logger.info("--> chunkWriter.writeResponseChunk, bytesToSend={}", bytesToSend);
                             BytesTransportRequest request = new BytesTransportRequest(bytesToSend, connection.getTransportVersion());
 
                             final ReleasableBytesReference bytesRef = bytesToSend;
