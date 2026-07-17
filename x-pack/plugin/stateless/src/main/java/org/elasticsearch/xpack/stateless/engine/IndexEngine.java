@@ -633,12 +633,31 @@ public class IndexEngine extends InternalEngine {
     @Override
     protected RefreshResult refreshInternalSearcher(String source, boolean block) throws EngineException {
         if (source.equals(REAL_TIME_GET_REFRESH_SOURCE) || source.equals(UNSAFE_VERSION_MAP_REFRESH_SOURCE)) {
+            // todo(burqen): Remove once issue solved https://github.com/elastic/elasticsearch/issues/150101
+            if (logger.isTraceEnabled()) {
+                logger.trace(
+                    "[{}] refreshInternalSearcher source [{}] performing flush-by-refresh; lastCommittedGen [{}]",
+                    shardId,
+                    source,
+                    getLastCommittedSegmentInfos().getGeneration()
+                );
+            }
             try {
                 IS_FLUSH_BY_REFRESH.set(true);
                 // TODO: Eventually the Refresh API will also need to transition (maybe) to an async API here.
                 flush(true, true);
             } finally {
                 IS_FLUSH_BY_REFRESH.set(false);
+            }
+            // todo(burqen): Remove once issue solved https://github.com/elastic/elasticsearch/issues/150101
+            if (logger.isTraceEnabled()) {
+                logger.trace(
+                    "[{}] refreshInternalSearcher source [{}] flush-by-refresh done; lastCommittedGen [{}] "
+                        + "(note: flush-by-refresh typically does not force commit upload)",
+                    shardId,
+                    source,
+                    getLastCommittedSegmentInfos().getGeneration()
+                );
             }
         }
         // TODO: could we avoid this refresh if we have flushed above?
@@ -801,6 +820,17 @@ public class IndexEngine extends InternalEngine {
     }
 
     public void commitSuccess(long generation) {
+        // todo(burqen): Remove once issue solved https://github.com/elastic/elasticsearch/issues/150101
+        if (logger.isTraceEnabled()) {
+            final var archive = (StatelessLiveVersionMapArchive) getLiveVersionMapArchive();
+            logger.trace(
+                "[{}] commitSuccess generation [{}] archiveIsUnsafe [{}] minSafeGeneration [{}]",
+                shardId,
+                generation,
+                archive.isUnsafe(),
+                archive.getMinSafeGeneration()
+            );
+        }
         ((StatelessLiveVersionMapArchive) getLiveVersionMapArchive()).afterUnpromotablesRefreshed(generation);
     }
 

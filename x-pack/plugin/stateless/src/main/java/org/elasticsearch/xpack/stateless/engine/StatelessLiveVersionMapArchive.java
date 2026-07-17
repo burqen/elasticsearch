@@ -12,6 +12,8 @@ import org.apache.lucene.util.RamUsageEstimator;
 import org.elasticsearch.index.engine.LiveVersionMap;
 import org.elasticsearch.index.engine.LiveVersionMapArchive;
 import org.elasticsearch.index.engine.VersionValue;
+import org.elasticsearch.logging.LogManager;
+import org.elasticsearch.logging.Logger;
 
 import java.util.Comparator;
 import java.util.Map;
@@ -21,6 +23,8 @@ import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.Supplier;
 
 public class StatelessLiveVersionMapArchive implements LiveVersionMapArchive {
+    // todo(burqen): Remove once issue solved https://github.com/elastic/elasticsearch/issues/150101
+    private static final Logger logger = LogManager.getLogger(StatelessLiveVersionMapArchive.class);
     // Used to keep track of VersionValues while a refresh on unpromotable shards is pending.
     // Keeps track of the evacuated old map entries and the generation at the time of the refresh
     // to decide which evacuated maps can be removed upon a flush.
@@ -71,6 +75,15 @@ public class StatelessLiveVersionMapArchive implements LiveVersionMapArchive {
             // Even if the old version lookup to archive is empty, we might need to keep track of it since it
             // might have seen a delete that we will need to calculate the archive's min delete timestamp.
             if (old.isEmpty() && old.minDeleteTimestamp() == Long.MAX_VALUE) {
+                // todo(burqen): Remove once issue solved https://github.com/elastic/elasticsearch/issues/150101
+                if (logger.isTraceEnabled()) {
+                    logger.trace(
+                        "lvm archive afterRefresh skipped empty old map; isUnsafe [{}] minSafeGeneration [{}] generationsTracked [{}]",
+                        isUnsafe,
+                        minSafeGeneration,
+                        archivePerGeneration.size()
+                    );
+                }
                 return;
             }
             minDeleteTimestamp.accumulateAndGet(old.minDeleteTimestamp(), Math::min);
@@ -79,14 +92,38 @@ public class StatelessLiveVersionMapArchive implements LiveVersionMapArchive {
             existing = archivePerGeneration.get(generation);
             if (existing == null) {
                 archivePerGeneration.put(generation, old);
+                // todo(burqen): Remove once issue solved https://github.com/elastic/elasticsearch/issues/150101
+                if (logger.isTraceEnabled()) {
+                    logger.trace(
+                        "lvm archive afterRefresh put generation [{}] oldEmpty [{}] oldUnsafe [{}]; "
+                            + "isUnsafe [{}] minSafeGeneration [{}] generationsTracked [{}]",
+                        generation,
+                        old.isEmpty(),
+                        old.isUnsafe(),
+                        isUnsafe,
+                        minSafeGeneration,
+                        archivePerGeneration.size()
+                    );
+                }
                 return;
             }
         }
         existing.merge(old);
+        // todo(burqen): Remove once issue solved https://github.com/elastic/elasticsearch/issues/150101
+        if (logger.isTraceEnabled()) {
+            logger.trace(
+                "lvm archive afterRefresh merged into existing generation; isUnsafe [{}] minSafeGeneration [{}] generationsTracked [{}]",
+                isUnsafe,
+                minSafeGeneration,
+                archivePerGeneration.size()
+            );
+        }
     }
 
     public void afterUnpromotablesRefreshed(long generation) {
         synchronized (mutex) {
+            final int generationsBefore = archivePerGeneration.size();
+            final boolean wasUnsafe = isUnsafe;
             if (generation >= minSafeGeneration) {
                 isUnsafe = false;
             }
@@ -99,6 +136,19 @@ public class StatelessLiveVersionMapArchive implements LiveVersionMapArchive {
                 .min()
                 .orElse(Long.MAX_VALUE);
             minDeleteTimestamp.set(newMin);
+            // todo(burqen): Remove once issue solved https://github.com/elastic/elasticsearch/issues/150101
+            if (logger.isTraceEnabled()) {
+                logger.trace(
+                    "lvm archive afterUnpromotablesRefreshed generation [{}] minSafeGeneration [{}]; "
+                        + "wasUnsafe [{}] isUnsafe [{}] generations {} -> {}",
+                    generation,
+                    minSafeGeneration,
+                    wasUnsafe,
+                    isUnsafe,
+                    generationsBefore,
+                    archivePerGeneration.size()
+                );
+            }
         }
     }
 

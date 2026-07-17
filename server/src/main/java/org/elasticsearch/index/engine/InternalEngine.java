@@ -1120,12 +1120,26 @@ public class InternalEngine extends Engine {
     }
 
     private VersionValue getVersionFromMap(BytesRef id) {
-        if (versionMap.isUnsafe()) {
+        // todo(burqen): Remove once issue solved https://github.com/elastic/elasticsearch/issues/150101
+        final boolean traceEnabled = logger.isTraceEnabled();
+        final boolean wasUnsafe = versionMap.isUnsafe();
+        if (wasUnsafe) {
             synchronized (versionMap) {
                 // we are switching from an unsafe map to a safe map. This might happen concurrently
                 // but we only need to do this once since the last operation per ID is to add to the version
                 // map so once we pass this point we can safely lookup from the version map.
                 if (versionMap.isUnsafe()) {
+                    if (traceEnabled) {
+                        logger.trace(
+                            "[{}] getVersionFromMap uid [{}] triggering UNSAFE_VERSION_MAP refresh; "
+                                + "safeAccessRequired [{}] archiveUnsafe [{}] lastCommittedGen [{}]",
+                            shardId,
+                            id,
+                            versionMap.isSafeAccessRequired(),
+                            liveVersionMapArchive.isUnsafe(),
+                            lastCommittedSegmentInfos.getGeneration()
+                        );
+                    }
                     refreshInternalSearcher(UNSAFE_VERSION_MAP_REFRESH_SOURCE, true);
                     // After the refresh, the doc that triggered it must now be part of the last commit.
                     // In rare cases, there could be other flush cycles completed in between the above line
@@ -1135,12 +1149,37 @@ public class InternalEngine extends Engine {
                     // which means the search shard needs to wait for extra generations and these generations
                     // are guaranteed to happen since they are all committed.
                     lastUnsafeSegmentGenerationForGets.set(lastCommittedSegmentInfos.getGeneration());
+                    if (traceEnabled) {
+                        logger.trace(
+                            "[{}] getVersionFromMap uid [{}] completed UNSAFE_VERSION_MAP refresh; "
+                                + "stillUnsafe [{}] archiveUnsafe [{}] lastCommittedGen [{}] lastUnsafeGenForGets [{}]",
+                            shardId,
+                            id,
+                            versionMap.isUnsafe(),
+                            liveVersionMapArchive.isUnsafe(),
+                            lastCommittedSegmentInfos.getGeneration(),
+                            lastUnsafeSegmentGenerationForGets.get()
+                        );
+                    }
                 }
                 versionMap.enforceSafeAccess();
             }
             // The versionMap can still be unsafe at this point due to archive being unsafe
         }
-        return versionMap.getUnderLock(id);
+        final VersionValue versionValue = versionMap.getUnderLock(id);
+        // todo(burqen): Remove once issue solved https://github.com/elastic/elasticsearch/issues/150101
+        if (traceEnabled) {
+            logger.trace(
+                "[{}] getVersionFromMap uid [{}] wasUnsafe [{}] found [{}] safeAccessRequired [{}] stillUnsafe [{}]",
+                shardId,
+                id,
+                wasUnsafe,
+                versionValue != null,
+                versionMap.isSafeAccessRequired(),
+                versionMap.isUnsafe()
+            );
+        }
+        return versionValue;
     }
 
     private boolean canOptimizeAddDocument(Index index) {

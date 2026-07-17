@@ -33,6 +33,8 @@ import org.elasticsearch.index.IndexVersions;
 import org.elasticsearch.index.mapper.TimeSeriesRoutingHashFieldMapper;
 import org.elasticsearch.index.mapper.TsidExtractingIdFieldMapper;
 import org.elasticsearch.index.mapper.Uid;
+import org.elasticsearch.logging.LogManager;
+import org.elasticsearch.logging.Logger;
 import org.elasticsearch.transport.Transports;
 import org.elasticsearch.xcontent.XContentParser;
 import org.elasticsearch.xcontent.XContentParserConfiguration;
@@ -53,7 +55,7 @@ import static org.elasticsearch.common.xcontent.XContentParserUtils.ensureExpect
  * Generates the shard id for {@code (id, routing)} pairs.
  */
 public abstract class IndexRouting {
-
+    Logger logger = LogManager.getLogger(IndexRouting.class);
     static final NodeFeature LOGSB_ROUTE_ON_SORT_FIELDS = new NodeFeature("routing.logsb_route_on_sort_fields");
 
     /**
@@ -207,11 +209,15 @@ public abstract class IndexRouting {
      * @return Updated shardId
      */
     protected final int rerouteWritesIfResharding(int shardId) {
-        return rerouteFromSplitTargetShard(shardId, IndexReshardingState.Split.TargetShardState.HANDOFF);
+        int newShardId = rerouteFromSplitTargetShard(shardId, IndexReshardingState.Split.TargetShardState.HANDOFF);
+        logger.trace("rerouteWritesIfResharding shardId=[{}], newShardId=[{}]", shardId, newShardId);
+        return newShardId;
     }
 
     protected final int rerouteSearchIfResharding(int shardId) {
-        return rerouteFromSplitTargetShard(shardId, IndexReshardingState.Split.TargetShardState.SPLIT);
+        int newShardId = rerouteFromSplitTargetShard(shardId, IndexReshardingState.Split.TargetShardState.SPLIT);
+        logger.trace("rerouteSearchIfResharding shardId=[{}], newShardId=[{}]", shardId, newShardId);
+        return newShardId;
     }
 
     private int rerouteFromSplitTargetShard(int shardId, IndexReshardingState.Split.TargetShardState minimumRequiredState) {

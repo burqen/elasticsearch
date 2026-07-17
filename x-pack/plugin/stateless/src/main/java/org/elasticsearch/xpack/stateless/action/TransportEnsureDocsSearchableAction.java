@@ -32,6 +32,7 @@ import org.elasticsearch.cluster.service.ClusterService;
 import org.elasticsearch.common.io.stream.Writeable;
 import org.elasticsearch.index.IndexReshardService;
 import org.elasticsearch.index.IndexService;
+import org.elasticsearch.index.engine.InternalEngine;
 import org.elasticsearch.index.mapper.Uid;
 import org.elasticsearch.index.shard.IndexShard;
 import org.elasticsearch.index.shard.ShardId;
@@ -41,6 +42,7 @@ import org.elasticsearch.threadpool.ThreadPool;
 import org.elasticsearch.transport.TransportService;
 
 import java.io.IOException;
+import java.util.Arrays;
 import java.util.List;
 
 import static org.elasticsearch.action.termvectors.EnsureDocsSearchableAction.ENSURE_DOCS_SEARCHABLE_ORIGIN;
@@ -121,6 +123,20 @@ public class TransportEnsureDocsSearchableAction extends TransportSingleShardAct
             final IndexShard indexShard = indexService.getShard(shardId.id());
 
             boolean docsFoundInLiveVersionMap = false;
+            // todo(burqen): Remove once issue solved https://github.com/elastic/elasticsearch/issues/150101
+            if (logger.isTraceEnabled()) {
+                logger.trace("eds checking live version map for shard [{}] docs {}", shardId, Arrays.toString(request.docIds()));
+                indexShard.withEngine(engine -> {
+                    logger.trace(
+                        "eds pre-check shard [{}] engine [{}] lastCommittedGen [{}] lastUnsafeGenForGets [{}]",
+                        shardId,
+                        engine.getClass().getSimpleName(),
+                        engine.getLastCommittedSegmentInfos().getGeneration(),
+                        engine instanceof InternalEngine ? engine.getLastUnsafeSegmentGenerationForGets() : -1L
+                    );
+                    return null;
+                });
+            }
             for (String docId : request.docIds()) {
                 final var docUid = Uid.encodeId(docId);
                 // There are a couple of limited cases where we may unnecessarily trigger an additional external refresh:
@@ -129,6 +145,16 @@ public class TransportEnsureDocsSearchableAction extends TransportSingleShardAct
                 // document will be removed from the archive in a subsequent stateless refresh.
                 // We prefer simplicity to complexity (trying to avoid the unnecessary stateless refresh) for the above limited cases.
                 boolean docInLiveVersionMap = indexShard.withEngine(engine -> engine.isDocumentInLiveVersionMap(docUid));
+                // todo(burqen): Remove once issue solved https://github.com/elastic/elasticsearch/issues/150101
+                if (logger.isTraceEnabled()) {
+                    logger.trace(
+                        "eds doc id [{}] (uid [{}]) in live version map of index shard [{}]: [{}]",
+                        docId,
+                        docUid,
+                        shardId,
+                        docInLiveVersionMap
+                    );
+                }
                 if (docInLiveVersionMap) {
                     logger.debug("doc id [{}] (uid [{}]) found in live version map of index shard [{}]", docId, docUid, shardId);
                     docsFoundInLiveVersionMap = true;
@@ -177,6 +203,15 @@ public class TransportEnsureDocsSearchableAction extends TransportSingleShardAct
                 // guaranteed to be the in the live version map archive until search shards are updated with the new commit.
                 // Thus, we can safely respond immediately as a no-op.
                 logger.debug("eds does not require refresh of index shard [{}]", shardId);
+                // todo(burqen): Remove once issue solved https://github.com/elastic/elasticsearch/issues/150101
+                if (logger.isTraceEnabled()) {
+                    logger.trace(
+                        "eds no-op refresh for shard [{}] with summary [{}]; none of docs {} were in the live version map",
+                        shardId,
+                        request.getSplitShardCountSummary(),
+                        Arrays.toString(request.docIds())
+                    );
+                }
                 l.onResponse(ActionResponse.Empty.INSTANCE);
             }
         }));

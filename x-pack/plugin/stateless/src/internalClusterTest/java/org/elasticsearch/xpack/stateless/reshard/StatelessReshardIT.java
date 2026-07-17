@@ -100,6 +100,7 @@ import org.elasticsearch.index.query.QueryBuilders;
 import org.elasticsearch.index.shard.IndexShard;
 import org.elasticsearch.index.shard.ShardId;
 import org.elasticsearch.indices.IndexClosedException;
+import org.elasticsearch.indices.IndicesService;
 import org.elasticsearch.indices.InvalidIndexNameException;
 import org.elasticsearch.plugins.Plugin;
 import org.elasticsearch.search.aggregations.AggregationBuilders;
@@ -125,6 +126,7 @@ import org.elasticsearch.xpack.stateless.StatelessMockRepositoryPlugin;
 import org.elasticsearch.xpack.stateless.StatelessMockRepositoryStrategy;
 import org.elasticsearch.xpack.stateless.action.TransportNewCommitNotificationAction;
 import org.elasticsearch.xpack.stateless.commits.StatelessCompoundCommit;
+import org.elasticsearch.xpack.stateless.engine.IndexEngine;
 import org.elasticsearch.xpack.stateless.objectstore.ObjectStoreService;
 import org.hamcrest.Matcher;
 
@@ -168,6 +170,11 @@ import static org.elasticsearch.cluster.routing.allocation.decider.MaxRetryAlloc
 import static org.elasticsearch.common.blobstore.OperationPurpose.INDICES;
 import static org.elasticsearch.index.IndexSettings.INDEX_REFRESH_INTERVAL_SETTING;
 import static org.elasticsearch.index.IndexSettings.MODE;
+import static org.elasticsearch.index.engine.LiveVersionMapTestUtils.get;
+import static org.elasticsearch.index.engine.LiveVersionMapTestUtils.getArchive;
+import static org.elasticsearch.index.engine.LiveVersionMapTestUtils.isSafeAccessRequired;
+import static org.elasticsearch.index.engine.LiveVersionMapTestUtils.isUnsafe;
+import static org.elasticsearch.index.engine.LiveVersionMapTestUtils.uid;
 import static org.elasticsearch.index.query.QueryBuilders.matchQuery;
 import static org.elasticsearch.test.hamcrest.ElasticsearchAssertions.assertAcked;
 import static org.elasticsearch.test.hamcrest.ElasticsearchAssertions.assertHitCount;
@@ -4542,7 +4549,11 @@ public class StatelessReshardIT extends AbstractStatelessPluginIntegTestCase {
     @TestLogging(
         reason = "debugging realtime read staleness during resharding",
         value = "org.elasticsearch.index.IndexReshardService:TRACE,"
-            + "org.elasticsearch.xpack.stateless.action.TransportEnsureDocsSearchableAction:TRACE"
+            + "org.elasticsearch.xpack.stateless.action.TransportEnsureDocsSearchableAction:TRACE,"
+            + "org.elasticsearch.cluster.routing.IndexRouting:TRACE,"
+            + "org.elasticsearch.index.engine.InternalEngine:TRACE,"
+            + "org.elasticsearch.xpack.stateless.engine.IndexEngine:TRACE,"
+            + "org.elasticsearch.xpack.stateless.engine.StatelessLiveVersionMapArchive:TRACE"
     )
     public void testMultiTermVectorsApiRealtimeGet() throws IOException, InterruptedException, ExecutionException {
         String masterNode = startMasterOnlyNode();
@@ -4648,6 +4659,43 @@ public class StatelessReshardIT extends AbstractStatelessPluginIntegTestCase {
             // Once we unblock handoff the write should complete.
             handoffBlocked.countDown();
             safeGet(indexFuture);
+            logger.info("document 3 id [{}] indexed at shard [{}]", document3Id, indexFuture.get().getShardId());
+            // todo(burqen): Remove once issue solved https://github.com/elastic/elasticsearch/issues/150101
+            // Peek LVM without calling isDocumentInLiveVersionMap (that can trigger an unsafe flush and change state).
+            {
+                final var doc3ShardId = indexFuture.get().getShardId();
+                final var indicesService = internalCluster().getInstance(IndicesService.class, indexNode);
+                final var indexShard = indicesService.indexServiceSafe(doc3ShardId.getIndex()).getShard(doc3ShardId.id());
+                indexShard.withEngine(engine -> {
+                    if (engine instanceof IndexEngine indexEngine) {
+                        final var map = indexEngine.getLiveVersionMap();
+                        final var archive = getArchive(map);
+                        final var versionValue = get(map, document3Id);
+                        final var archiveValue = archive == null ? null : archive.get(uid(document3Id));
+                        logger.info(
+                            "after indexing doc3 [{}] on [{}]: inLVM(current/old/archive/tombstone) [{}] inArchiveOnlyPeek [{}] "
+                                + "isUnsafe [{}] safeAccessRequired [{}] lastCommittedGen [{}] lastUnsafeGenForGets [{}] engine [{}]",
+                            document3Id,
+                            doc3ShardId,
+                            versionValue != null,
+                            archiveValue != null,
+                            isUnsafe(map),
+                            isSafeAccessRequired(map),
+                            indexEngine.getLastCommittedSegmentInfos().getGeneration(),
+                            indexEngine.getLastUnsafeSegmentGenerationForGets(),
+                            engine.getClass().getSimpleName()
+                        );
+                    } else {
+                        logger.info(
+                            "after indexing doc3 [{}] on [{}]: engine is [{}] (not IndexEngine)",
+                            document3Id,
+                            doc3ShardId,
+                            engine.getClass().getName()
+                        );
+                    }
+                    return null;
+                });
+            }
 
             // And now we perform the "stale" read.
             logger.info(
