@@ -88,14 +88,19 @@ public abstract class AbstractIndicesClusterStateServiceTestCase extends ESTestC
      */
     public void assertClusterStateMatchesNodeState(ClusterState state, IndicesClusterStateService indicesClusterStateService) {
         final var indicesService = (MockIndicesService) indicesClusterStateService.indicesService;
-        final var failedShardsCache = indicesClusterStateService.failedShardsCache;
+        final var shardCreationStates = indicesClusterStateService.shardCreationStates;
         final var localRoutingNode = state.getRoutingNodes().node(state.getNodes().getLocalNodeId());
         if (localRoutingNode != null) {
             if (enableRandomFailures == false) {
                 // initializing a shard should succeed when enableRandomFailures is disabled
                 // active shards can be failed if state persistence was disabled in an earlier CS update
-                if (failedShardsCache.values().stream().anyMatch(e -> e.routing().initializing())) {
-                    fail("failed shard cache should not contain initializing shard routing: " + failedShardsCache.values());
+                if (shardCreationStates.values()
+                    .stream()
+                    .anyMatch(
+                        s -> s instanceof IndicesClusterStateService.ShardCreationState.FailedToMaster failedToMaster
+                            && failedToMaster.routing().initializing()
+                    )) {
+                    fail("failed shard cache should not contain initializing shard routing: " + shardCreationStates.values());
                 }
             }
             // check that all shards in local routing nodes have been allocated
@@ -104,7 +109,7 @@ public abstract class AbstractIndicesClusterStateServiceTestCase extends ESTestC
                 IndexMetadata indexMetadata = state.metadata().getProject().getIndexSafe(index);
 
                 MockIndexShard shard = indicesService.getShardOrNull(shardRouting.shardId());
-                final var failedShard = failedShardsCache.get(shardRouting.shardId());
+                final var failedShard = failedShardFor(shardCreationStates, shardRouting.shardId());
 
                 if (state.blocks().disableStatePersistence()) {
                     if (shard != null) {
@@ -133,7 +138,7 @@ public abstract class AbstractIndicesClusterStateServiceTestCase extends ESTestC
                     }
                     if (shard == null && failedShard == null) {
                         // shard must either be there or there must be a failure
-                        fail("Shard with id " + shardRouting + " expected but missing in indicesService and failedShardsCache");
+                        fail("Shard with id " + shardRouting + " expected but missing in indicesService and shardCreationStates");
                     }
                     if (enableRandomFailures == false) {
                         if (shard == null && shardRouting.initializing() && failedShard.routing() == shardRouting) {
@@ -200,12 +205,29 @@ public abstract class AbstractIndicesClusterStateServiceTestCase extends ESTestC
             }
 
             if (shardsFound == false) {
-                // check if we have shards of that index in failedShardsCache
-                // if yes, we might not have cleaned the index as failedShardsCache can be populated by another thread
-                assertFalse(failedShardsCache.keySet().stream().noneMatch(shardId -> shardId.getIndex().equals(index)));
+                // check if we have shards of that index in shardCreationStates
+                // if yes, we might not have cleaned the index as shardCreationStates can be populated by another thread
+                assertFalse(shardCreationStates.keySet().stream().noneMatch(key -> key.shardId().getIndex().equals(index)));
             }
 
         }
+    }
+
+    /// Returns the {@link IndicesClusterStateService.ShardCreationState.FailedToMaster} entry for {@code shardId}
+    /// (any allocation), or {@code null} if there isn't one. Scans by shard id, not allocation id, so a stale
+    /// entry left behind for a since-replaced allocation is still surfaced to the caller's consistency checks.
+    @Nullable
+    private static IndicesClusterStateService.ShardCreationState.FailedToMaster failedShardFor(
+        Map<IndicesClusterStateService.ShardCreationKey, IndicesClusterStateService.ShardCreationState> shardCreationStates,
+        ShardId shardId
+    ) {
+        for (final var entry : shardCreationStates.entrySet()) {
+            if (entry.getKey().shardId().equals(shardId)
+                && entry.getValue() instanceof IndicesClusterStateService.ShardCreationState.FailedToMaster failedToMaster) {
+                return failedToMaster;
+            }
+        }
+        return null;
     }
 
     /**
