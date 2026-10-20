@@ -1470,25 +1470,12 @@ public class IndicesClusterStateService extends AbstractLifecycleComponent imple
                     .runOnApplierThread("retry recovery " + shardRouting.shardId(), Priority.NORMAL, currentState -> {
                         synchronized (this) {
                             try {
-                                // Check the allocation is still current *before* anything else: nothing
-                                // guarantees a cluster-state-apply sweep has run between this task being
-                                // forked and it waking up, so a since-superseded allocation's marker may
-                                // still be sitting here untouched.
                                 if (shardCreationMarkerIsOutOfDate(key, currentState)) {
-                                    // Allocation went stale before this retry attempt ran. Clean up
-                                    // proactively rather than waiting for the next sweep, and give up
-                                    // quietly.
                                     shardCreationStates.remove(key);
                                     return;
                                 }
 
                                 if (shardCreationStates.get(key) != myMarker) {
-                                    // Not my marker anymore. Either a create attempt already claimed it,
-                                    // or -- since AwaitingRetry is a plain value and tryRecordAwaitingRetry
-                                    // always constructs a fresh instance -- a different, unrelated retry
-                                    // round for the exact same (shardId, allocationId) wrote a
-                                    // coincidentally-equal-looking marker later. Identity, not just
-                                    // value equality, distinguishes "still mine" from that case.
                                     return;
                                 }
 
