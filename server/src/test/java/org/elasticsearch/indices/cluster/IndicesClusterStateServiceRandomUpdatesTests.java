@@ -440,21 +440,27 @@ public class IndicesClusterStateServiceRandomUpdatesTests extends AbstractIndice
         final long primaryTerm = localState.metadata().getProject().index(index).primaryTerm(shardId.id());
 
         // check that failing unrelated allocation does not remove shard
+        // (no real claim was ever made for this synthetic, unrelated allocation, so there's no ticket to pass)
         indicesCSSvc.handleRecoveryFailure(
             shardRouting.reinitializeReplicaShard(),
             FAIL_SILENT,
             primaryTerm,
             new Exception("dummy"),
-            indicesCSSvc.indicesService.getShardOrNull(shardId).recoveryState()
+            indicesCSSvc.indicesService.getShardOrNull(shardId).recoveryState(),
+            null
         );
         assertNotNull(indicesCSSvc.indicesService.getShardOrNull(shardId));
 
+        final var inFlight = (IndicesClusterStateService.ShardCreationState.InFlight) indicesCSSvc.shardCreationStates.get(
+            IndicesClusterStateService.ShardCreationKey.fromRouting(shardRouting)
+        );
         indicesCSSvc.handleRecoveryFailure(
             shardRouting,
             FAIL_SILENT,
             primaryTerm,
             new Exception("dummy"),
-            indicesCSSvc.indicesService.getShardOrNull(shardId).recoveryState()
+            indicesCSSvc.indicesService.getShardOrNull(shardId).recoveryState(),
+            inFlight
         );
         assertNull(indicesCSSvc.indicesService.getShardOrNull(shardId));
     }

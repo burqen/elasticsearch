@@ -236,6 +236,15 @@ public abstract class AbstractIndicesClusterStateServiceTestCase extends ESTestC
     protected class MockIndicesService implements AllocatedIndices<MockIndexShard, MockIndexService> {
         private volatile Map<String, MockIndexService> indices = emptyMap();
 
+        /// Whether {@link #createShard} should immediately simulate a successful recovery by calling
+        /// the given {@link RecoveryListener#onRecoveryDone}. This mock never actually recovers, and
+        /// {@link IndicesClusterStateService} now relies on that callback to release the shard-creation
+        /// ticket it claimed, so most callers want this. Override to {@code false} for tests that drive
+        /// recovery completion/failure manually via the captured listener.
+        protected boolean autoCompleteRecovery() {
+            return true;
+        }
+
         @Override
         public synchronized MockIndexService createIndex(
             IndexMetadata indexMetadata,
@@ -305,6 +314,9 @@ public abstract class AbstractIndicesClusterStateServiceTestCase extends ESTestC
             MockIndexService indexService = indexService(recoveryState.getShardId().getIndex());
             MockIndexShard indexShard = indexService.createShard(shardRouting);
             indexShard.recoveryState = recoveryState;
+            if (autoCompleteRecovery()) {
+                recoveryListener.onRecoveryDone(recoveryState, ShardLongFieldRange.UNKNOWN, ShardLongFieldRange.UNKNOWN);
+            }
         }
 
         @Override

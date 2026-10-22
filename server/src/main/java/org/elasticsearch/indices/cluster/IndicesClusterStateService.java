@@ -171,21 +171,61 @@ public class IndicesClusterStateService extends AbstractLifecycleComponent imple
         }
     }
 
-    /// The lifecycle state of an attempt to get one shard allocation created locally.
+    /// The lifecycle state of an attempt to get one shard allocation created locally. Every variant is
+    /// an *identity* ticket that determines if "I'm still the owner of this attempt". Hence, each
+    /// implementation overrides `equals`/`hashCode` to compare by reference rather than by field values.
+    /// This matters because `(shardId, allocationId)` can legitimately host more than one create attempt
+    /// over time (e.g. a primary-term bump reusing the same allocation id), and a stale attempt ticket
+    /// can coincidentally have the same field values as a newer, still-current one.
     sealed interface ShardCreationState {
-        /// A createShard() attempt is currently running (including shard-lock-retry continuations).
-        /// Exclusively owned: once claimed, nothing else claims or recreates this allocation until it
-        /// resolves (success/failure) or the allocation itself goes stale.
-        record InFlight(long startTimeMillis, int localRecoveryRetries) implements ShardCreationState {}
+        /// Marks exclusive ownership of a shard creation attempt: once claimed, nothing else claims or
+        /// recreates this allocation until it resolves or the allocation itself goes stale.
+        /// Lifecycle covers `createShardWhenLockAvailable`, any shard-lock-retry continuation and whole
+        /// recovery until it terminates in ([RecoveryListener#onRecoveryDone]/[RecoveryListener#onRecoveryFailure]).
+        /// The specific instance doubles as an identity ticket: [ShardRecoveryListener] compare it against
+        /// the current map entry before acting, so a recovery that's been superseded (a newer attempt already
+        /// claimed this key) reliably no-ops instead of acting on stale information.
+        record InFlight(long startTimeMillis, int localRecoveryRetries) implements ShardCreationState {
+            @Override
+            public boolean equals(Object obj) {
+                return this == obj;
+            }
+
+            @Override
+            public int hashCode() {
+                return System.identityHashCode(this);
+            }
+        }
 
         /// No attempt is currently running; the next createShard() for this allocation should use
         /// this retry count. Put on [FailureStrategy#RETRY] in [#handleRecoveryFailure].
-        /// Identity check is used by dispatched retry attempt, "if my marker is still present, I will attempt to retry".
-        record AwaitingRetry(int localRecoveryRetries) implements ShardCreationState {}
+        /// Identity check is used by dispatched retry attempt, "if my ticket is still present,
+        /// I will attempt to retry".
+        record AwaitingRetry(int localRecoveryRetries) implements ShardCreationState {
+            @Override
+            public boolean equals(Object obj) {
+                return this == obj;
+            }
+
+            @Override
+            public int hashCode() {
+                return System.identityHashCode(this);
+            }
+        }
 
         /// Failure has been (or is being) reported to master; will prevent shard creation for this allocation until removed.
         /// Only cleared when shard allocation becomes stale through a cluster state update.
-        record FailedToMaster(ShardRouting routing, long primaryTerm, ShardFailureType failureType) implements ShardCreationState {}
+        record FailedToMaster(ShardRouting routing, long primaryTerm, ShardFailureType failureType) implements ShardCreationState {
+            @Override
+            public boolean equals(Object obj) {
+                return this == obj;
+            }
+
+            @Override
+            public int hashCode() {
+                return System.identityHashCode(this);
+            }
+        }
     }
 
     // Visible for tests
@@ -445,7 +485,7 @@ public class IndicesClusterStateService extends AbstractLifecycleComponent imple
 
         for (final var entry : shardCreationStates.entrySet()) {
             final ShardCreationKey key = entry.getKey();
-            if (shardCreationMarkerIsOutOfDate(key, state)) {
+            if (shardCreationTicketIsOutOfDate(key, state)) {
                 shardCreationStates.remove(key);
                 continue;
             }
@@ -471,7 +511,7 @@ public class IndicesClusterStateService extends AbstractLifecycleComponent imple
     /// Returns {@code true} if {@code key} is no longer "the current allocation" in {@code state} -- i.e. the
     /// shard isn't routed to this node anymore (including when this node isn't in the routing table at all),
     /// is routed under a different allocation id, or is no longer initializing.
-    private static boolean shardCreationMarkerIsOutOfDate(ShardCreationKey key, ClusterState state) {
+    private static boolean shardCreationTicketIsOutOfDate(ShardCreationKey key, ClusterState state) {
         final ShardRouting currentRouting = getCurrentRouting(key, state);
         return (currentRouting == null
             || currentRouting.allocationId().getId().equals(key.allocationId()) == false
@@ -781,6 +821,8 @@ public class IndicesClusterStateService extends AbstractLifecycleComponent imple
                             shardCloseExecutor,
                             getShardsClosedListener()
                         );
+                        // Need to reset here because key will no be cleared by updateShardCreationStates
+                        resetShardCreationAttempt(ShardCreationKey.fromRouting(currentShardRouting));
                         continue;
                     }
 
@@ -803,10 +845,29 @@ public class IndicesClusterStateService extends AbstractLifecycleComponent imple
                             shardCloseExecutor,
                             getShardsClosedListener()
                         );
+                        // Need to reset here because key will no be cleared by updateShardCreationStates
+                        resetShardCreationAttempt(ShardCreationKey.fromRouting(currentShardRouting));
                     }
                 }
             }
         }
+    }
+
+    /// Reset the shard allocation creation state:
+    /// - Any failed shard creation ticket is cleared.
+    /// - Any in-flight ticket is cleared and localRecoveryRetries is preserved.
+    ///
+    /// The next [createShard] attempt will claim a new InFlight attempt with the correct retry count.
+    /// Used when current shard is stale and new shard allocation use the same allocation id.
+    private void resetShardCreationAttempt(ShardCreationKey key) {
+        assert Thread.holdsLock(this);
+        shardCreationStates.computeIfPresent(key, (k, current) -> switch (current) {
+            case ShardCreationState.InFlight(var startTimeMillis, var localRecoveryRetries) -> new ShardCreationState.AwaitingRetry(
+                localRecoveryRetries
+            );
+            case ShardCreationState.AwaitingRetry awaitingRetry -> awaitingRetry;
+            case ShardCreationState.FailedToMaster failedToMaster -> null;
+        });
     }
 
     /**
@@ -1035,15 +1096,17 @@ public class IndicesClusterStateService extends AbstractLifecycleComponent imple
                     @Override
                     public void onResponse(Boolean success) {
                         if (Boolean.TRUE.equals(success)) {
+                            // Shard creation ticket is now owned by ShardRecoveryListener and will be released once recovery completes.
                             logger.debug("{} created shard with primary term [{}]", shardId, primaryTerm);
                         } else {
+                            // False means we gave up because we no long own the shard creation attempt. Nothing to clean up.
                             logger.debug("{} gave up while trying to create shard", shardId);
                         }
-                        shardCreationStates.remove(key, inFlight);
                     }
 
                     @Override
                     public void onFailure(Exception e) {
+                        // Shard creation ticket is updated in failAndRemoveShard
                         failAndRemoveShard(
                             shardRouting,
                             primaryTerm,
@@ -1105,7 +1168,7 @@ public class IndicesClusterStateService extends AbstractLifecycleComponent imple
                 state.metadata().projectFor(shardRouting.index()).id(),
                 shardRouting,
                 recoveryTargetService,
-                new ShardRecoveryListener(shardRouting, primaryTerm, state.version()),
+                new ShardRecoveryListener(shardRouting, primaryTerm, state.version(), inFlight),
                 repositoriesService,
                 failedShardHandler,
                 this::updateGlobalCheckpointForShard,
@@ -1382,10 +1445,21 @@ public class IndicesClusterStateService extends AbstractLifecycleComponent imple
          */
         private final long creationClusterStateVersion;
 
-        private ShardRecoveryListener(final ShardRouting shardRouting, final long primaryTerm, final long creationClusterStateVersion) {
+        /**
+         * The shard creation ticket claimed for this attempt.
+         */
+        private final ShardCreationState.InFlight inFlight;
+
+        private ShardRecoveryListener(
+            final ShardRouting shardRouting,
+            final long primaryTerm,
+            final long creationClusterStateVersion,
+            final ShardCreationState.InFlight inFlight
+        ) {
             this.shardRouting = shardRouting;
             this.primaryTerm = primaryTerm;
             this.creationClusterStateVersion = creationClusterStateVersion;
+            this.inFlight = inFlight;
         }
 
         @Override
@@ -1394,6 +1468,12 @@ public class IndicesClusterStateService extends AbstractLifecycleComponent imple
             ShardLongFieldRange timestampMillisFieldRange,
             ShardLongFieldRange eventIngestedMillisFieldRange
         ) {
+            final var key = ShardCreationKey.fromRouting(shardRouting);
+            // Relies on InFlight#equals using reference-identity rather than value-equality
+            if (shardCreationStates.remove(key, inFlight) == false) {
+                logger.debug("{} ignoring stale recovery success; no longer the current attempt", key);
+                return;
+            }
             shardStateAction.shardStarted(
                 shardRouting,
                 primaryTerm,
@@ -1419,7 +1499,7 @@ public class IndicesClusterStateService extends AbstractLifecycleComponent imple
                 threadPool.getThreadContext(),
                 ActionListener.noop(),
                 listener -> {
-                    handleRecoveryFailure(shardRouting, failureStrategy, primaryTerm, e, state);
+                    handleRecoveryFailure(shardRouting, failureStrategy, primaryTerm, e, state, inFlight);
                     listener.onResponse(null);
                 }
             );
@@ -1432,8 +1512,15 @@ public class IndicesClusterStateService extends AbstractLifecycleComponent imple
         FailureStrategy failureStrategy,
         long primaryTerm,
         Exception failure,
-        RecoveryState recoveryState
+        RecoveryState recoveryState,
+        ShardCreationState.InFlight inFlight
     ) {
+        final ShardCreationKey key = ShardCreationKey.fromRouting(shardRouting);
+        if (shardCreationStates.get(key) != inFlight) {
+            // Relies on InFlight#equals using reference-identity rather than value-equality
+            logger.debug("{} ignoring stale recovery failure; no longer the current attempt", key);
+            return;
+        }
         // If local recovery retry is not enabled or recovery source is RESHARD_SPLIT we notify the master instead.
         // TODO: Remove RESHARD_SPLIT exclusion once local retries support it
         FailureStrategy finalStrategy = failureStrategy.equals(FailureStrategy.RETRY)
@@ -1456,33 +1543,28 @@ public class IndicesClusterStateService extends AbstractLifecycleComponent imple
 
             if (finalStrategy == FailureStrategy.RETRY) {
                 logger.warn(() -> "retry recovery for shard after failure [" + shardRouting + "]", failure);
-                // Record the retry marker before scheduling so the next createShard (from this retry path
+                // Record the retry ticket before scheduling so the next createShard (from this retry path
                 // or the cluster state application) uses the retry context.
-                final ShardCreationKey key = ShardCreationKey.fromRouting(shardRouting);
-                final var awaitingRetry = tryRecordAwaitingRetry(key, recoveryState.getLocalRetries() + 1);
-                if (awaitingRetry.isEmpty()) {
-                    return;
-                }
-                final var myMarker = awaitingRetry.get();
+                final var myTicket = recordAwaitingRetry(key, inFlight, recoveryState.getLocalRetries() + 1);
 
                 // Fork onto cluster state applier thread to retry attempt to create shard
                 clusterService.getClusterApplierService()
                     .runOnApplierThread("retry recovery " + shardRouting.shardId(), Priority.NORMAL, currentState -> {
                         synchronized (this) {
                             try {
-                                if (shardCreationMarkerIsOutOfDate(key, currentState)) {
+                                if (shardCreationTicketIsOutOfDate(key, currentState)) {
                                     shardCreationStates.remove(key);
                                     return;
                                 }
 
-                                if (shardCreationStates.get(key) != myMarker) {
+                                if (shardCreationStates.get(key) != myTicket) {
                                     return;
                                 }
 
                                 final var indexService = indicesService.indexService(key.shardId().getIndex());
                                 if (indexService == null) {
                                     // Index not locally available yet (e.g. after disableStatePersistence).
-                                    // Keep the marker so a later CS create can still apply localRecoveryRetries.
+                                    // Keep the retry ticket so a later CS create can still apply localRecoveryRetries.
                                     return;
                                 }
                                 assert indexService.getShardOrNull(key.shardId().id()) == null
@@ -1512,6 +1594,9 @@ public class IndicesClusterStateService extends AbstractLifecycleComponent imple
                             }
                         }
                     }, ActionListener.noop());
+            } else if (finalStrategy == FailureStrategy.FAIL_SILENT || finalStrategy == FailureStrategy.ABORT) {
+                // Clear this shard creation ticket
+                shardCreationStates.remove(key, inFlight);
             }
         } catch (Exception e) {
             // should not be possible
@@ -1521,28 +1606,18 @@ public class IndicesClusterStateService extends AbstractLifecycleComponent imple
         }
     }
 
-    /// Records that {@code key} should be retried with at least `localRecoveryRetries`, and returns the
-    /// marker that was written. Returns empty (writing nothing) if the key is already owned or settled by
-    /// someone else: an [ShardCreationState.InFlight] attempt, an equal-or-higher [ShardCreationState.AwaitingRetry]
-    /// marker, or a [ShardCreationState.FailedToMaster] result.
-    private Optional<ShardCreationState.AwaitingRetry> tryRecordAwaitingRetry(ShardCreationKey key, int localRecoveryRetries) {
+    /// Records that shard creation defined by `key` should be retried with `localRecoveryRetries`,
+    /// and returns the ticket that was written. Caller must be the owner of current`inFlight` ticket.
+    private ShardCreationState.AwaitingRetry recordAwaitingRetry(
+        ShardCreationKey key,
+        ShardCreationState.InFlight inFlight,
+        int localRecoveryRetries
+    ) {
         assert Thread.holdsLock(this);
-        ShardCreationState current = shardCreationStates.get(key);
-        if (current instanceof ShardCreationState.InFlight) {
-            logger.debug("{} not recording retry: current state [{}] belongs to a newer attempt", key, current);
-            return Optional.empty();
-        }
-        if (current instanceof ShardCreationState.FailedToMaster) {
-            logger.debug("{} not recording retry: already failed to master [{}]", key, current);
-            return Optional.empty();
-        }
-        if (current instanceof ShardCreationState.AwaitingRetry(var n) && n >= localRecoveryRetries) {
-            logger.debug("{} not recording retry: existing marker [{}] already covers [{}]", key, n, localRecoveryRetries);
-            return Optional.empty();
-        }
-        var candidate = new ShardCreationState.AwaitingRetry(localRecoveryRetries);
-        shardCreationStates.put(key, candidate);
-        return Optional.of(candidate);
+        assert shardCreationStates.get(key) == inFlight : "expected our own InFlight ticket still present for " + key;
+        var ticket = new ShardCreationState.AwaitingRetry(localRecoveryRetries);
+        shardCreationStates.put(key, ticket);
+        return ticket;
     }
 
     private void failAndRemoveShard(
